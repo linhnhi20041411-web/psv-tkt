@@ -1,4 +1,4 @@
-// server.js - Phiên bản Tích hợp Supabase RAG (Giữ nguyên Logic Prompt cũ)
+// server.js - Phiên bản Tích hợp Supabase RAG
 
 const express = require('express');
 const axios = require('axios');
@@ -23,6 +23,7 @@ const supabaseKey = process.env.SUPABASE_KEY;
 if (!supabaseUrl || !supabaseKey) {
     console.error("❌ LỖI: Chưa cấu hình SUPABASE_URL hoặc SUPABASE_KEY");
 }
+// Tạo client Supabase
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 if (apiKeys.length > 0) {
@@ -45,14 +46,16 @@ function getRandomKey() {
 // --- 3. HÀM MỚI: TÌM KIẾM CONTEXT TỪ SUPABASE ---
 async function searchSupabaseContext(query) {
     try {
-        // Dùng SDK để tạo Embedding cho câu hỏi (dùng model text-embedding-004)
+        if (!supabaseUrl || !supabaseKey) return "";
+        
+        // Dùng SDK để tạo Embedding cho câu hỏi
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
         const result = await model.embedContent(query);
         const queryVector = result.embedding.values;
 
-        // Gọi hàm RPC trong Supabase để tìm văn bản tương đồng
+        // Gọi hàm RPC trong Supabase
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
             match_threshold: 0.5, // Chỉ lấy độ chính xác > 50%
@@ -68,11 +71,11 @@ async function searchSupabaseContext(query) {
 
     } catch (error) {
         console.error("Lỗi tìm kiếm Supabase:", error);
-        return ""; // Trả về rỗng nếu lỗi, để bot xử lý theo trường hợp không có data
+        return ""; 
     }
 }
 
-// --- 4. HÀM GỌI API GEMINI (GIỮ NGUYÊN LOGIC CŨ) ---
+// --- 4. HÀM GỌI API GEMINI ---
 async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     if (keyIndex >= apiKeys.length) {
         if (retryCount < 1) {
@@ -84,7 +87,8 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 
     const currentKey = apiKeys[keyIndex];
-    const model = "gemini-2.0-flash"; // Khuyên dùng 2.0-flash hoặc 1.5-flash
+    // Dùng Flash 2.0 (hoặc 1.5-flash tùy bạn chọn)
+    const model = "gemini-2.0-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -95,7 +99,6 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
         return response;
     } catch (error) {
         const status = error.response ? error.response.status : 0;
-        
         if (status === 429 || status === 400 || status === 403 || status >= 500) {
             console.warn(`⚠️ Key ${keyIndex} lỗi (Mã: ${status}). Đổi Key...`);
             if (status === 429) await sleep(1000); 
@@ -106,22 +109,24 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 }
 
 app.post('/api/chat', async (req, res) => {
-    if (apiKeys.length === 0) return res.status(500).json({ error: 'Chưa cấu hình API Key.' });
-
     try {
-        const { question } = req.body; // KHÔNG lấy context từ body nữa
+        // --- ĐIỂM KHÁC BIỆT QUAN TRỌNG ---
+        // Code cũ: const { question, context } = req.body;
+        // Code mới: Chỉ lấy question
+        const { question } = req.body; 
+        
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // --- BƯỚC MỚI: TỰ TÌM CONTEXT TỪ SUPABASE ---
         console.log(`🔍 Đang tìm dữ liệu cho: "${question}"`);
+        
+        // Tự tìm context từ Supabase
         const context = await searchSupabaseContext(question);
 
         if (!context) {
-            // Nếu không tìm thấy gì trong Database
-            return res.json({ answer: "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site ." });
+            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site ." });
         }
 
-        // --- TỪ ĐÂY TRỞ XUỐNG LÀ LOGIC CŨ CỦA BẠN (GIỮ NGUYÊN) ---
+        // --- CÁC PHẦN SAU GIỮ NGUYÊN ---
         const safetySettings = [
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
             { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -129,7 +134,6 @@ app.post('/api/chat', async (req, res) => {
             { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
         ];
 
-        // BƯỚC 1: PROMPT GỐC
         const promptGoc = `Bạn là một công cụ trích xuất thông tin chính xác tuyệt đối. Nhiệm vụ của bạn là trích xuất câu trả lời cho câu hỏi của người dùng CHỈ từ trong VĂN BẢN NGUỒN được cung cấp.
 
         **QUY TẮC BẮT BUỘC PHẢI TUÂN THEO TUYỆT ĐỐI:**
@@ -148,7 +152,6 @@ app.post('/api/chat', async (req, res) => {
         Câu hỏi: ${question}
         Câu trả lời:`;
 
-        console.log("--> Đang thử Prompt Gốc...");
         let response = await callGeminiWithRetry({
             contents: [{ parts: [{ text: promptGoc }] }],
             safetySettings: safetySettings,
@@ -166,22 +169,12 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        // BƯỚC 2: CHIẾN THUẬT CỨU NGUY (GIỮ NGUYÊN)
         if (finishReason === "RECITATION" || !aiResponse) {
-            console.log("⚠️ Prompt Gốc bị chặn. Kích hoạt Chiến thuật Diễn Giải...");
-
+            console.log("⚠️ Kích hoạt Chiến thuật Diễn Giải...");
             const promptDienGiai = `Bạn là trợ lý hỗ trợ tu tập.
             NV: Trả lời câu hỏi: "${question}" dựa trên VĂN BẢN NGUỒN.
-            
-            VẤN ĐỀ: Việc trích dẫn nguyên văn đang bị lỗi hệ thống (Recitation Error).
-            
-            GIẢI PHÁP (BẮT BUỘC):
-            1. **ĐỌC HIỂU:** Tìm các ý chính liên quan đến câu hỏi.
-            2. **DIỄN ĐẠT LẠI (QUAN TRỌNG):** Viết lại các ý đó dưới dạng liệt kê gạch đầu dòng.
-               - Dùng ngôn ngữ ngắn gọn, súc tích hơn.
-               - **TUYỆT ĐỐI KHÔNG** làm sai lệch ý nghĩa giáo lý.
-               - Giữ nguyên các thuật ngữ Phật học.
-            3. **XƯNG HÔ:** Bắt đầu bằng câu: "Do hạn chế về bản quyền trích dẫn, đệ xin tóm lược các ý chính như sau:".
+            GIẢI PHÁP: Đọc hiểu và diễn đạt lại ý chính dưới dạng gạch đầu dòng. Không làm sai lệch ý nghĩa.
+            XƯNG HÔ: Bắt đầu bằng: "Do hạn chế về bản quyền trích dẫn, đệ xin tóm lược các ý chính như sau:".
 
             --- VĂN BẢN NGUỒN ---
             ${context}
@@ -193,17 +186,13 @@ app.post('/api/chat', async (req, res) => {
                 generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
             }, 0);
 
-            if (response.data && response.data.candidates && response.data.candidates.length > 0) {
-                const candidate = response.data.candidates[0];
-                if (candidate.content?.parts?.[0]?.text) {
-                    aiResponse = candidate.content.parts[0].text;
-                } else {
-                    aiResponse = "Nội dung này Google chặn tuyệt đối (Recitation). Sư huynh vui lòng xem trực tiếp trong sách ạ.";
-                }
+            if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
+                aiResponse = response.data.candidates[0].content.parts[0].text;
+            } else {
+                aiResponse = "Nội dung này Google chặn tuyệt đối (Recitation).";
             }
         }
 
-        // TRẢ KẾT QUẢ
         let finalAnswer = "";
         if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
              finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
@@ -214,12 +203,8 @@ app.post('/api/chat', async (req, res) => {
         res.json({ answer: finalAnswer });
 
     } catch (error) {
-        let msg = "Lỗi hệ thống.";
-        if (error.message === "ALL_KEYS_EXHAUSTED") {
-            msg = "Hệ thống đang quá tải, tất cả các Key đều đang bận. Vui lòng thử lại sau 1-2 phút.";
-        }
-        console.error("Final Error Handler:", error.message);
-        res.status(503).json({ answer: msg });
+        console.error("Lỗi:", error);
+        res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
