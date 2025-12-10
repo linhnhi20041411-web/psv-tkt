@@ -1,4 +1,4 @@
-// server.js - Phiên bản Hybrid Search: Vector + Keyword (Chính xác tuyệt đối)
+// server.js - Phiên bản Hybrid: Vector + Keyword + URL Priority (Siêu chính xác)
 
 const express = require('express');
 const axios = require('axios');
@@ -20,9 +20,7 @@ const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.leng
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-    console.error("❌ LỖI: Chưa cấu hình SUPABASE_URL hoặc SUPABASE_KEY");
-}
+if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu cấu hình Supabase");
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 function getRandomKey() {
@@ -40,7 +38,7 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
         throw new Error("ALL_KEYS_EXHAUSTED");
     }
     const currentKey = apiKeys[keyIndex];
-    const model = "gemini-2.5-flash-lite"; 
+    const model = "gemini-2.0-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -59,79 +57,89 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- HÀM 1: PHÂN TÍCH & TRÍCH XUẤT TỪ KHÓA ---
+// --- HÀM 1: PHÂN TÍCH TỪ KHÓA & SLUG URL ---
+// Chuyển câu hỏi thành dạng không dấu để tìm trong URL (Ví dụ: "phóng sinh tối" -> "phong sinh")
+function removeVietnameseTones(str) {
+    str = str.replace(/à|á|ạ|ả|ã|â|ầ|ấ|ậ|ẩ|ẫ|ă|ằ|ắ|ặ|ẳ|ẵ/g,"a"); 
+    str = str.replace(/è|é|ẹ|ẻ|ẽ|ê|ề|ế|ệ|ể|ễ/g,"e"); 
+    str = str.replace(/ì|í|ị|ỉ|ĩ/g,"i"); 
+    str = str.replace(/ò|ó|ọ|ỏ|õ|ô|ồ|ố|ộ|ổ|ỗ|ơ|ờ|ớ|ợ|ở|ỡ/g,"o"); 
+    str = str.replace(/ù|ú|ụ|ủ|ũ|ư|ừ|ứ|ự|ử|ữ/g,"u"); 
+    str = str.replace(/ỳ|ý|ỵ|ỷ|ỹ/g,"y"); 
+    str = str.replace(/đ/g,"d");
+    return str;
+}
+
 async function analyzeQuery(originalQuestion) {
     try {
-        // Yêu cầu AI vừa viết lại câu hỏi, vừa nhặt từ khóa quan trọng
-        const prompt = `Bạn là chuyên gia tìm kiếm. 
-        Nhiệm vụ: 
-        1. Viết lại câu hỏi dùng thuật ngữ Phật học chính xác (Ví dụ: tối -> ban đêm, giết -> sát sanh).
-        2. Trích xuất 2-3 từ khóa quan trọng nhất để tìm kiếm trong Database (Keywords).
+        const prompt = `Phân tích câu hỏi tìm kiếm.
+        1. Viết lại dùng từ ngữ Phật học (tối -> ban đêm, làm thịt -> sát sanh).
+        2. Trích xuất từ khóa quan trọng (Keywords).
+        3. Tạo từ khóa dạng không dấu (Slug) để tìm trong URL.
         
-        Trả về định dạng JSON thuần túy:
+        Trả về JSON:
         {
-          "rewritten": "câu hỏi đã viết lại",
-          "keywords": ["từ khóa 1", "từ khóa 2"]
+          "rewritten": "câu hỏi mới",
+          "keywords": ["từ khóa 1", "từ khóa 2"],
+          "slug_keywords": ["tu khoa khong dau"]
         }
-
+        
         Câu gốc: "${originalQuestion}"`;
 
         const response = await callGeminiWithRetry({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: "application/json" } // Bắt buộc trả về JSON
+            generationConfig: { responseMimeType: "application/json" }
         }, 0);
 
         const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        const result = JSON.parse(text);
-        return result;
-
+        return JSON.parse(text);
     } catch (e) {
-        console.error("Lỗi phân tích query:", e.message);
-        // Fallback nếu lỗi
-        return { rewritten: originalQuestion, keywords: [] }; 
+        // Fallback thủ công nếu AI lỗi
+        const noAccent = removeVietnameseTones(originalQuestion.toLowerCase());
+        return { 
+            rewritten: originalQuestion, 
+            keywords: [originalQuestion], 
+            slug_keywords: noAccent.split(" ").filter(w => w.length > 2) 
+        };
     }
 }
 
-// --- HÀM 2: TÌM KIẾM VECTOR (Theo ý nghĩa) ---
+// --- HÀM 2: TÌM KIẾM TRONG URL (QUAN TRỌNG NHẤT) ---
+async function searchByUrl(slugKeywords) {
+    if (!slugKeywords || slugKeywords.length === 0) return [];
+    try {
+        // Tìm bài viết mà URL có chứa các từ khóa không dấu
+        // Ví dụ: URL 'co-phong-sinh-vao-ban-em' sẽ khớp với 'phong', 'sinh', 'ban', 'dem'
+        let query = supabase.from('vn_buddhism_content').select('content, url').limit(5);
+        
+        // Lấy 2 từ khóa quan trọng nhất để tìm trong URL
+        const mainSlugs = slugKeywords.slice(0, 2); 
+        
+        mainSlugs.forEach(slug => {
+            query = query.ilike('url', `%${slug}%`);
+        });
+
+        const { data, error } = await query;
+        if (data && data.length > 0) {
+            console.log(`🎯 URL Search trúng ${data.length} bài! (URL: ${data[0].url})`);
+        }
+        return data || [];
+    } catch (e) { return []; }
+}
+
+// --- HÀM 3: TÌM KIẾM VECTOR ---
 async function searchVector(query) {
     try {
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         const result = await model.embedContent(query);
-        const { data, error } = await supabase.rpc('match_documents', {
+        const { data } = await supabase.rpc('match_documents', {
             query_embedding: result.embedding.values,
             match_threshold: 0.25, 
             match_count: 5
         });
-        if (error) throw error;
         return data || [];
-    } catch (e) {
-        console.error("Lỗi Vector Search:", e.message);
-        return [];
-    }
-}
-
-// --- HÀM 3: TÌM KIẾM TỪ KHÓA (Theo chữ cái chính xác) ---
-async function searchKeyword(keywords) {
-    if (!keywords || keywords.length === 0) return [];
-    try {
-        console.log(`   -> Đang chạy Keyword Search với: ${JSON.stringify(keywords)}`);
-        
-        // Tạo query tìm kiếm: nội dung phải chứa TẤT CẢ từ khóa
-        let query = supabase.from('vn_buddhism_content').select('content, url').limit(3);
-        
-        // Lặp qua từng từ khóa và thêm điều kiện ILIKE (Case insensitive)
-        keywords.forEach(kw => {
-            query = query.ilike('content', `%${kw}%`);
-        });
-
-        const { data, error } = await query;
-        if (error) throw error;
-        return data || [];
-    } catch (e) {
-        console.error("Lỗi Keyword Search:", e.message);
-        return [];
-    }
+    } catch (e) { return []; }
 }
 
 app.post('/api/chat', async (req, res) => {
@@ -141,62 +149,50 @@ app.post('/api/chat', async (req, res) => {
 
         console.log(`\n=== USER HỎI: "${question}" ===`);
         
-        // 1. Phân tích câu hỏi
+        // 1. Phân tích
         const analysis = await analyzeQuery(question);
-        console.log(`🔍 Phân tích: Rewritten="${analysis.rewritten}" | Keywords=${JSON.stringify(analysis.keywords)}`);
+        console.log(`🔍 Bot hiểu: ${analysis.rewritten}`);
 
-        // 2. Chạy SONG SONG cả 2 cách tìm kiếm (Hybrid Search)
-        const [vectorResults, keywordResults] = await Promise.all([
-            searchVector(analysis.rewritten),
-            searchKeyword(analysis.keywords)
+        // 2. CHẠY 2 CHIẾN THUẬT SONG SONG
+        // Chiến thuật A: Tìm trong URL (Bắt dính bài viết chính xác)
+        // Chiến thuật B: Tìm Vector (Tìm theo ý nghĩa)
+        const [urlResults, vectorResults] = await Promise.all([
+            searchByUrl(analysis.slug_keywords),
+            searchVector(analysis.rewritten)
         ]);
 
-        console.log(`   -> Vector tìm thấy: ${vectorResults.length} bài.`);
-        console.log(`   -> Keyword tìm thấy: ${keywordResults.length} bài.`);
-
-        // 3. Gộp kết quả (Ưu tiên Keyword lên đầu vì nó chính xác hơn)
-        // Dùng Map để loại bỏ bài trùng lặp (dựa trên URL hoặc Content)
+        // 3. Gộp kết quả (Ưu tiên URL lên đầu tiên)
         const combinedMap = new Map();
-
-        // Thêm kết quả Keyword trước
-        keywordResults.forEach(item => combinedMap.set(item.url, item));
-        // Thêm kết quả Vector sau (nếu chưa có)
+        
+        // Nạp kết quả URL trước (Ưu tiên số 1)
+        urlResults.forEach(item => combinedMap.set(item.url, item));
+        // Nạp kết quả Vector sau
         vectorResults.forEach(item => {
             if (!combinedMap.has(item.url)) combinedMap.set(item.url, item);
         });
 
-        const finalData = Array.from(combinedMap.values()).slice(0, 8); // Lấy tối đa 8 bài
+        const finalData = Array.from(combinedMap.values()).slice(0, 5);
 
-        // --- XỬ LÝ KHI KHÔNG TÌM THẤY ---
+        // --- XỬ LÝ KHÔNG TÌM THẤY ---
         if (finalData.length === 0) {
-            console.log("❌ Không tìm thấy dữ liệu nào.");
             return res.json({ 
-                answer: `Đệ tìm không thấy thông tin này trong kho dữ liệu.<br><br>Sư huynh thử tra cứu tại: <a href="https://mucluc.pmtl.site" target="_blank">mucluc.pmtl.site</a>` 
+                answer: `Đệ tìm không thấy thông tin này.<br><br>Sư huynh tra cứu tại: <a href="https://mucluc.pmtl.site" target="_blank">mucluc.pmtl.site</a>` 
             });
         }
 
-        // 4. Chuẩn bị Context
-        // Lấy URL của bài đầu tiên (ưu tiên từ Keyword search)
         const topUrl = finalData[0].url; 
         const contextText = finalData.map(doc => doc.content).join("\n\n---\n\n");
 
-        // 5. Gọi Gemini Trả lời
+        console.log(`✅ Chốt bài viết: ${topUrl}`); // Xem log để biết nó chọn bài nào
+
+        // 4. Gọi Gemini
         const promptGoc = `Bạn là trợ lý ảo Phật giáo.
-        
-        Dữ liệu tham khảo (Được tìm thấy từ kho tàng thư):
+        Dữ liệu tham khảo:
         ---
         ${contextText}
         ---
-
         Câu hỏi: "${analysis.rewritten}"
-
-        YÊU CẦU:
-        1. Trả lời câu hỏi dựa trên Dữ liệu tham khảo. 
-        2. Nếu tìm thấy bài viết đúng chủ đề, hãy tóm tắt ý chính của bài đó để trả lời.
-        3. Nếu dữ liệu mâu thuẫn, hãy ưu tiên bài viết có chứa các từ khóa: ${analysis.keywords.join(", ")}.
-        4. Trả lời ngắn gọn, xưng hô "đệ" - "Sư huynh".
-
-        Câu trả lời:`;
+        Yêu cầu: Trả lời ngắn gọn, đúng trọng tâm. Ưu tiên thông tin từ bài viết có tiêu đề khớp với câu hỏi nhất.`;
 
         let response = await callGeminiWithRetry({
             contents: [{ parts: [{ text: promptGoc }] }],
