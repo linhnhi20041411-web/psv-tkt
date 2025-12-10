@@ -85,10 +85,25 @@ async function searchSupabaseContext(query) {
         // Gọi hàm RPC trong Supabase
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            match_threshold: 0.5, // Chỉ lấy độ chính xác > 50%
-            match_count: 5        // Lấy 5 đoạn văn bản tốt nhất
+            match_threshold: 0.25, 
+            match_count: 5 
         });
 
+        // Ngay sau đoạn gọi rpc ở trên:
+        
+        if (error) {
+            console.error("❌ Lỗi Supabase:", error);
+        } else {
+            // In ra kết quả để xem máy chấm bao nhiêu điểm
+            console.log("✅ Kết quả tìm kiếm:", data.map(item => ({
+                id: item.id,
+                similarity: item.similarity, // <--- Quan trọng: Xem điểm số ở đây
+                content_preview: item.content ? item.content.substring(0, 50) + "..." : "No content"
+            })));
+        }
+        
+        if (!data || data.length === 0) return null;
+        
         if (error) throw error;
 
         if (!data || data.length === 0) return null;
@@ -227,17 +242,38 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        // --- CẬP NHẬT MỚI: GHÉP NÚT XEM THÊM ---
+        // --- CẬP NHẬT MỚI: CẢ 2 TRƯỜNG HỢP ĐỀU CÓ NÚT BẤM ---
         let finalAnswer = "";
+
+        // TRƯỜNG HỢP 1: Không tìm thấy kết quả -> Hiện nút "XEM THÊM" trỏ về Mục lục
         if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
-             finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
-        } else {
+             finalAnswer = "Đệ chưa tìm thấy nội dung chi tiết trong kho dữ liệu hiện tại. Mời Sư huynh tra cứu thêm tại mục lục tổng quan:";
+             
+             // Thêm nút "XEM THÊM"
+             finalAnswer += `
+                <br>
+                <div style="margin-top: 15px;">
+                    <a href="https://mucluc.pmtl.site" target="_blank" 
+                       style="display:inline-block; background-color:#b45309; color:white; padding:10px 25px; border-radius:30px; text-decoration:none; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s; font-family: sans-serif;">
+                       🔍 Mục Lục
+                    </a>
+                </div>`;
+        } 
+        
+        // TRƯỜNG HỢP 2: Tìm thấy kết quả -> Hiện nút "ĐỌC KHAI THỊ" trỏ về bài viết gốc
+        else {
             finalAnswer = "**Phụng Sự Viên Ảo Trả Lời :**\n\n" + aiResponse;
 
-            // Kiểm tra và thêm nút nếu có Link
             if (sourceUrl && sourceUrl.startsWith('http')) {
-                // Style nút bấm màu cam đậm, bo tròn
-                finalAnswer += `\n\n<br><a href="${sourceUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Thêm Chi Tiết</a>`;
+                // Thêm nút "ĐỌC KHAI THỊ"
+                finalAnswer += `
+                <br>
+                <div style="margin-top: 15px;">
+                    <a href="${sourceUrl}" target="_blank" 
+                       style="display:inline-block; background-color:#b45309; color:white; padding:10px 25px; border-radius:30px; text-decoration:none; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s; font-family: sans-serif;">
+                       📖 Đọc Khai Thị
+                    </a>
+                </div>`;
             } else {
                 finalAnswer += "\n\n_Dữ liệu trích xuất từ kho tàng thư._";
             }
