@@ -208,7 +208,7 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
     }
 
     // 2. Cấu hình Blog
-    const BLOG_URL = 'https://nhomcongtu.blogspot.com/feeds/posts/default?alt=json&max-results=5'; // Lấy 5 bài mới nhất thôi cho nhanh
+    const BLOG_URL = 'https://timkhaithi.pmtl.site/feeds/posts/default?alt=json&max-results=30'; 
     
     console.log("🚀 Admin đang kích hoạt đồng bộ Blogger...");
     let logs = []; // Lưu lại nhật ký để trả về cho điện thoại xem
