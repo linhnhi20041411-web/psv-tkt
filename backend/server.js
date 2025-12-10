@@ -36,7 +36,7 @@ async function searchSupabaseContext(query) {
             query_embedding: queryVector,
             query_text: query,  // <--- Gửi thêm câu hỏi gốc xuống DB
             match_threshold: 0.1, // Giữ mức thấp an toàn
-            match_count: 25
+            match_count: 35
         });
 
         if (error) {
