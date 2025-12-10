@@ -38,7 +38,7 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
         throw new Error("ALL_KEYS_EXHAUSTED");
     }
     const currentKey = apiKeys[keyIndex];
-    const model = "gemini-2.0-flash"; 
+    const model = "gemini-2.5-flash-lite"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
