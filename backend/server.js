@@ -23,16 +23,20 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // --- 2. HÀM TÌM KIẾM (Đã tinh chỉnh cho dữ liệu mới) ---
 async function searchSupabaseContext(query) {
     try {
-        const genAI = new GoogleGenerativeAI(apiKeys[0]); // Dùng key đầu tiên để embed
+        // 1. Tạo Vector như cũ
+        const genAI = new GoogleGenerativeAI(apiKeys[0]); 
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
         const result = await model.embedContent(query);
         const queryVector = result.embedding.values;
 
+        // 2. GỌI HÀM HYBRID MỚI
+        // Lưu ý: Đã thêm tham số `query_text: query`
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            match_threshold: 0.5, // Tăng lên 0.30 vì dữ liệu mới rất sạch và khớp
-            match_count: 50        // Chỉ cần 6 đoạn văn (vì mỗi đoạn giờ rất dài và đủ ý)
+            query_text: query,  // <--- Gửi thêm câu hỏi gốc xuống DB
+            match_threshold: 0.2, // Giữ mức thấp an toàn
+            match_count: 8 
         });
 
         if (error) {
@@ -42,18 +46,15 @@ async function searchSupabaseContext(query) {
 
         if (!data || data.length === 0) return null;
 
-        // Log để kiểm tra độ chính xác
-        console.log("🔍 Top kết quả tìm thấy:", data.map(d => ({ 
+        // Log kiểm tra xem nó tìm bằng cách nào (Điểm > 1 là tìm bằng từ khóa)
+        console.log("🔍 Kết quả Hybrid:", data.map(d => ({ 
             id: d.id, 
-            score: d.similarity,
-            title_preview: d.content.substring(0, 50) + "..."
+            score: d.similarity, // Nếu score = 1.5 tức là tìm thấy nhờ từ khóa!
+            preview: d.content.substring(0, 30) 
         })));
 
-        // Lấy URL của kết quả có điểm cao nhất
         const topUrl = data[0].url; 
-
-        // Ghép nội dung: Vì chunk lớn, ta nối các chunk lại bằng dấu ngắt dòng rõ ràng
-        const contextText = data.map(doc => doc.content).join("\n\n--------------------\n\n");
+        const contextText = data.map(doc => doc.content).join("\n\n---\n\n");
 
         return { text: contextText, url: topUrl };
 
