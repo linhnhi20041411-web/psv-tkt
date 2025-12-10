@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Quản Trị Viên - Đồng Bộ Dữ Liệu</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
+
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
+        <h1 class="text-2xl font-bold text-gray-800 mb-2 text-center">⚙️ Quản Lý Dữ Liệu</h1>
+        <p class="text-gray-500 text-sm text-center mb-6">Đồng bộ bài viết mới từ Blogger về Chatbot</p>
+
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 mb-1">Mật khẩu Admin</label>
+                <input type="password" id="password" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none" placeholder="Nhập mật khẩu...">
+            </div>
+
+            <button onclick="startSync()" id="btnSync" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-lg transition duration-300 flex justify-center items-center">
+                🔄 Cập Nhật Bài Mới Ngay
+            </button>
+        </div>
+
+        <div id="statusArea" class="mt-6 hidden">
+            <h3 class="font-bold text-gray-700 mb-2">Nhật ký hoạt động:</h3>
+            <div id="logs" class="bg-gray-900 text-green-400 text-xs p-4 rounded-lg h-48 overflow-y-auto font-mono">
+                </div>
+        </div>
+    </div>
+
+    <script>
+        // CẤU HÌNH URL SERVER CỦA HUYNH
+        const API_URL = "https://psv-tkt.onrender.com"; // Thay bằng link Render của huynh nếu khác
+
+        async function startSync() {
+            const pass = document.getElementById('password').value;
+            if (!pass) return alert("Vui lòng nhập mật khẩu!");
+
+            const btn = document.getElementById('btnSync');
+            const statusArea = document.getElementById('statusArea');
+            const logBox = document.getElementById('logs');
+
+            // Giao diện đang chạy
+            btn.disabled = true;
+            btn.innerHTML = `<svg class="animate-spin h-5 w-5 mr-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Đang xử lý...`;
+            statusArea.classList.remove('hidden');
+            logBox.innerHTML = "> Bắt đầu kết nối tới Server...\n";
+
+            try {
+                const response = await fetch(`${API_URL}/api/admin/sync-blogger`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pass })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    logBox.innerHTML += `❌ LỖI: ${data.error || "Không xác định"}\n`;
+                } else {
+                    logBox.innerHTML += `✅ ${data.message}\n`;
+                    if (data.logs && data.logs.length > 0) {
+                        data.logs.forEach(line => logBox.innerHTML += `+ ${line}\n`);
+                    } else {
+                        logBox.innerHTML += "> Không có bài viết mới nào cần cập nhật.\n";
+                    }
+                    logBox.innerHTML += "\n=== HOÀN TẤT ===";
+                }
+
+            } catch (error) {
+                logBox.innerHTML += `❌ Lỗi mạng: ${error.message}\n`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = "🔄 Cập Nhật Bài Mới Ngay";
+            }
+        }
+    </script>
+</body>
+</html>
