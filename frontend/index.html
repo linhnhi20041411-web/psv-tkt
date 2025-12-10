@@ -40,7 +40,7 @@
         /* START: CSS ĐỂ GIẢI QUYẾT DỨT ĐIỂM VẤN ĐỀ POPUP */
         /* Quy tắc này có độ ưu tiên rất cao, đảm bảo mọi link bên trong
            bong bóng chat sẽ luôn có màu xanh và gạch chân. */
-        .message-bubble a {
+        .message-bubble a:not([style*="background-color"]) {
             color: #2563eb !important;
             text-decoration: underline !important;
             font-weight: 600 !important;
@@ -153,7 +153,15 @@
             }
 
             const contentP = document.createElement('p');
-            contentP.innerHTML = linkifyAndSanitize(message);
+			// NẾU LÀ BOT: Cho phép hiển thị HTML (để hiện nút bấm)
+            if (sender === 'bot') {
+                // Chỉ chuyển đổi xuống dòng \n thành <br>, giữ nguyên các thẻ HTML khác
+                contentP.innerHTML = message.replace(/\n/g, '<br>'); 
+            } 
+            // NẾU LÀ USER: Lọc mã độc như cũ
+            else {
+                contentP.innerHTML = linkifyAndSanitize(message);
+            }
             messageBubble.appendChild(contentP);
             messageWrapper.appendChild(messageBubble);
             chatMessages.appendChild(messageWrapper);
