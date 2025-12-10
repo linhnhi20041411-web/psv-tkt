@@ -26,26 +26,23 @@ async function searchSupabaseContext(query) {
         const genAI = new GoogleGenerativeAI(apiKeys[0]); 
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
-        // ⚠️ THAY ĐỔI QUAN TRỌNG NHẤT Ở ĐÂY:
-        // Phải báo cho model biết đây là "RETRIEVAL_QUERY" (Câu truy vấn tìm kiếm)
-        // Nếu không có dòng này, khả năng tìm kiếm ngữ nghĩa giảm 50%
+        // Tạo vector cho tìm kiếm
         const result = await model.embedContent({
             content: { parts: [{ text: query }] },
             taskType: "RETRIEVAL_QUERY" 
         });
-        
         const queryVector = result.embedding.values;
 
-        // Gọi hàm Hybrid
+        // GỌI HÀM HYBRID MỚI (ĐÃ CÓ LOGIC PYTHON)
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            query_text: query,  
-            match_threshold: 0.15, // Đừng để thấp quá (0.1), 0.15 là vừa đẹp để lọc rác
-            match_count: 20        // Lấy 20 bài để Gemini tự lọc
+            query_text: query,      // Gửi câu hỏi xuống để chạy Full Text Search
+            match_threshold: 0.15,  // Ngưỡng vector thấp để không sót
+            match_count: 20         // Lấy 20 bài (để Gemini lọc)
         });
 
         if (error) {
-            console.error("❌ Lỗi Supabase RPC:", error);
+            console.error("❌ Lỗi Supabase:", error);
             return null;
         }
 
