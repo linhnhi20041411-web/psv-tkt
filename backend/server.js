@@ -35,8 +35,8 @@ async function searchSupabaseContext(query) {
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
             query_text: query,  // <--- Gửi thêm câu hỏi gốc xuống DB
-            match_threshold: 0.2, // Giữ mức thấp an toàn
-            match_count: 8 
+            match_threshold: 0.1, // Giữ mức thấp an toàn
+            match_count: 25
         });
 
         if (error) {
