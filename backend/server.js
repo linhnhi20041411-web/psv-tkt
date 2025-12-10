@@ -94,7 +94,7 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 
     const currentKey = apiKeys[keyIndex];
     // Dùng Flash 2.0 (hoặc 1.5-flash tùy bạn chọn)
-    const model = "gemini-2.0-flash"; 
+    const model = "gemini-2.5-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
