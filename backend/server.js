@@ -36,6 +36,33 @@ app.get('/api/health', (req, res) => {
     res.status(200).json({ status: "OK", server: "Ready" });
 });
 
+app.get('/api/test-db', async (req, res) => {
+    try {
+        // Thử lấy 1 dòng dữ liệu từ bảng 'vn_buddhism_content' (hoặc bảng 'articles')
+        // Lưu ý: Thay tên bảng cho đúng với bảng thực tế huynh đang có
+        const { data, error } = await supabase
+            .from('vn_buddhism_content') 
+            .select('*')
+            .limit(1);
+
+        if (error) throw error;
+
+        res.json({ 
+            status: "✅ KẾT NỐI THÀNH CÔNG", 
+            message: "Render đã đọc được dữ liệu từ Supabase",
+            data_preview: data 
+        });
+
+    } catch (err) {
+        console.error("Lỗi kết nối Supabase:", err);
+        res.status(500).json({ 
+            status: "❌ KẾT NỐI THẤT BẠI", 
+            error_message: err.message,
+            hint: "Kiểm tra lại SUPABASE_URL và SUPABASE_KEY trong phần Environment của Render."
+        });
+    }
+});
+
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- 2. HÀM HỖ TRỢ: LẤY KEY NGẪU NHIÊN ---
