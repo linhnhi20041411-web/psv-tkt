@@ -1,4 +1,4 @@
-// server.js - Phiên bản Fix Lỗi Link & Hạ Ngưỡng Tìm Kiếm
+// server.js - Phiên bản RAG Thông Minh (Tự động hiểu từ đồng nghĩa)
 
 const express = require('express');
 const axios = require('axios');
@@ -41,8 +41,7 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
         throw new Error("ALL_KEYS_EXHAUSTED");
     }
     const currentKey = apiKeys[keyIndex];
-    // Dùng Flash 2.0 hoặc 1.5-flash
-    const model = "gemini-2.5-flash-lite"; 
+    const model = "gemini-2.5-flash-lite"; // Dùng bản Flash cho nhanh
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -61,7 +60,37 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- HÀM TÌM KIẾM SUPABASE (ĐÃ ĐIỀU CHỈNH) ---
+// --- HÀM MỚI: TỐI ƯU HÓA CÂU HỎI (QUAN TRỌNG NHẤT) ---
+// Giúp biến đổi "buổi tối" -> "ban đêm", "làm thịt" -> "sát sanh"...
+async function optimizeQuery(originalQuestion) {
+    try {
+        const prompt = `Bạn là chuyên gia tìm kiếm dữ liệu Phật học.
+        Nhiệm vụ: Viết lại câu hỏi của người dùng để tìm kiếm chính xác hơn trong sách vở.
+        
+        Quy tắc:
+        1. Giữ nguyên ý chính.
+        2. Thay từ ngữ đời thường (văn nói) bằng thuật ngữ chính xác hoặc từ đồng nghĩa thường gặp trong văn viết (Ví dụ: "buổi tối" -> "ban đêm", "giết" -> "sát sanh", "cúng" -> "nghi thức").
+        3. CHỈ TRẢ VỀ CÂU HỎI MỚI, không giải thích gì thêm.
+        
+        Câu gốc: "${originalQuestion}"
+        Câu viết lại:`;
+
+        const response = await callGeminiWithRetry({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0.1 }
+        }, 0);
+
+        const newQuery = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+        console.log(`🔄 Tối ưu câu hỏi: "${originalQuestion}" -> "${newQuery}"`);
+        return newQuery || originalQuestion;
+
+    } catch (e) {
+        console.error("Lỗi tối ưu query:", e.message);
+        return originalQuestion; // Lỗi thì dùng câu gốc
+    }
+}
+
+// --- HÀM TÌM KIẾM SUPABASE ---
 async function searchSupabaseContext(query) {
     try {
         if (!supabaseUrl || !supabaseKey) return null;
@@ -69,23 +98,21 @@ async function searchSupabaseContext(query) {
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
+        // Tạo vector cho câu hỏi (lúc này câu hỏi đã được chuẩn hóa)
         const result = await model.embedContent(query);
         const queryVector = result.embedding.values;
 
         // Gọi hàm RPC
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            match_threshold: 0.3, // <--- SỬA: Hạ xuống 0.3 để tìm dễ hơn
+            match_threshold: 0.4, // Để 0.4 là hợp lý cho câu hỏi đã chuẩn hóa
             match_count: 5
         });
 
-        if (error) {
-            console.error("Lỗi RPC:", error);
-            throw error;
-        }
+        if (error) throw error;
 
-        // Log để kiểm tra xem tìm được bao nhiêu dòng
-        console.log(`🔍 Tìm thấy ${data ? data.length : 0} kết quả trong DB.`);
+        // Log số lượng tìm thấy
+        console.log(`🔍 Tìm thấy ${data ? data.length : 0} kết quả.`);
 
         if (!data || data.length === 0) return null;
 
@@ -105,15 +132,17 @@ app.post('/api/chat', async (req, res) => {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        console.log(`USER HỎI: "${question}"`);
+        console.log(`\n--- BẮT ĐẦU XỬ LÝ: "${question}" ---`);
         
-        // 1. Tìm kiếm Supabase
-        const searchResult = await searchSupabaseContext(question);
+        // 1. BƯỚC MỚI: Dịch câu hỏi sang văn phong sách vở
+        const optimizedQuestion = await optimizeQuery(question);
 
-        // --- XỬ LÝ KHI KHÔNG TÌM THẤY (SỬA LỖI LINK CHẾT) ---
+        // 2. Tìm kiếm bằng câu hỏi ĐÃ TỐI ƯU (tỉ lệ trúng cao hơn hẳn)
+        const searchResult = await searchSupabaseContext(optimizedQuestion);
+
+        // --- XỬ LÝ KHI KHÔNG TÌM THẤY ---
         if (!searchResult) {
-            console.log("⚠️ Không tìm thấy dữ liệu phù hợp trong DB.");
-            // Trả về HTML link trực tiếp để đảm bảo bấm được
+            console.log("⚠️ Không tìm thấy dữ liệu.");
             return res.json({ 
                 answer: `Đệ tìm trong dữ liệu không thấy thông tin này.<br><br>Mời Sư huynh tra cứu thêm tại mục lục tổng quan:<br><a href="https://mucluc.pmtl.site" target="_blank" style="color:#2563eb; text-decoration:underline; font-weight:bold;">👉 https://mucluc.pmtl.site</a>` 
             });
@@ -122,7 +151,7 @@ app.post('/api/chat', async (req, res) => {
         const context = searchResult.text;
         const sourceUrl = searchResult.url; 
 
-        // 2. Gọi Gemini
+        // 3. Gọi Gemini trả lời
         const safetySettings = [
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
             { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -135,13 +164,13 @@ app.post('/api/chat', async (req, res) => {
         1. Chỉ trả lời dựa vào VĂN BẢN NGUỒN.
         2. Nếu không có thông tin, trả lời: "NONE".
         3. Xưng hô: "đệ" và "Sư huynh".
-        4. Trả lời ngắn gọn.
+        4. Trả lời ngắn gọn, đúng trọng tâm.
         
         --- NGUỒN ---
         ${context}
         --- HẾT ---
         
-        Câu hỏi: ${question}
+        Câu hỏi gốc: ${question}
         Câu trả lời:`;
 
         let response = await callGeminiWithRetry({
@@ -155,9 +184,8 @@ app.post('/api/chat', async (req, res) => {
             aiResponse = response.data.candidates[0].content.parts[0].text;
         }
 
-        // Xử lý Recitation hoặc không có đáp án
+        // Fallback nếu Gemini từ chối trả lời (Recitation)
         if (!aiResponse || aiResponse.includes("NONE")) {
-             // Fallback sang diễn giải
              const promptDienGiai = `Tóm tắt ý chính trả lời cho câu hỏi: "${question}" dựa trên: \n${context}`;
              response = await callGeminiWithRetry({
                 contents: [{ parts: [{ text: promptDienGiai }] }],
@@ -168,17 +196,15 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        // 3. Ghép kết quả và Nút Xem Thêm
+        // 4. Ghép kết quả + Nút Xem Thêm
         let finalAnswer = "";
         
-        // Kiểm tra lại lần nữa nếu AI vẫn trả lời NONE
         if (aiResponse.includes("NONE") || aiResponse.length < 5) {
-             finalAnswer = `Đệ tìm thấy bài viết liên quan nhưng AI chưa trích xuất được. Sư huynh vui lòng xem trực tiếp ạ.`;
+             finalAnswer = `Đệ tìm thấy bài viết liên quan nhưng chưa trích xuất được ý chính. Sư huynh vui lòng bấm nút bên dưới để xem chi tiết ạ.`;
         } else {
             finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
         }
 
-        // Luôn luôn hiện nút nếu có Link
         if (sourceUrl && sourceUrl.startsWith('http')) {
             finalAnswer += `\n\n<br><a href="${sourceUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Thêm Chi Tiết</a>`;
         } else {
