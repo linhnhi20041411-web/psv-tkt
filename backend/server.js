@@ -85,8 +85,8 @@ async function searchSupabaseContext(query) {
         // Gọi hàm RPC trong Supabase
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            match_threshold: 0.25, 
-            match_count: 20 
+            match_threshold: 0.5, 
+            match_count: 7
         });
 
         // Ngay sau đoạn gọi rpc ở trên:
