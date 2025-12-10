@@ -31,8 +31,8 @@ async function searchSupabaseContext(query) {
 
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            match_threshold: 0.30, // Tăng lên 0.30 vì dữ liệu mới rất sạch và khớp
-            match_count: 6        // Chỉ cần 6 đoạn văn (vì mỗi đoạn giờ rất dài và đủ ý)
+            match_threshold: 0.5, // Tăng lên 0.30 vì dữ liệu mới rất sạch và khớp
+            match_count: 20        // Chỉ cần 6 đoạn văn (vì mỗi đoạn giờ rất dài và đủ ý)
         });
 
         if (error) {
