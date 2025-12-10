@@ -169,6 +169,123 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
+// --- [PHẦN MỚI] ADMIN API ĐỒNG BỘ BLOGGER ---
+
+// Hàm xử lý text (Copy từ script cũ)
+function cleanTextSync(text) {
+    if (!text) return "";
+    let clean = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n');
+    clean = clean.replace(/<[^>]*>?/gm, '').replace(/&nbsp;/g, ' ').replace(/\n\s*\n/g, '\n').trim();
+    return clean;
+}
+
+// Hàm chia nhỏ (Copy từ script cũ)
+function chunkTextSync(text, maxChunkSize = 2500) {
+    if (!text) return [];
+    const rawParagraphs = text.split(/\n+/).map(p => p.trim()).filter(p => p.length > 0);
+    const chunks = [];
+    let currentChunk = "";
+    for (const paragraph of rawParagraphs) {
+        if ((currentChunk.length + paragraph.length) < maxChunkSize) {
+            currentChunk += (currentChunk ? "\n\n" : "") + paragraph;
+        } else {
+            if (currentChunk.length > 50) chunks.push(currentChunk);
+            currentChunk = paragraph;
+        }
+    }
+    if (currentChunk.length > 50) chunks.push(currentChunk);
+    return chunks;
+}
+
+// API Admin để kích hoạt đồng bộ
+app.post('/api/admin/sync-blogger', async (req, res) => {
+    // 1. Bảo mật đơn giản: Kiểm tra mật khẩu
+    const { password } = req.body;
+    const adminPass = process.env.ADMIN_PASSWORD || "123456"; // Mặc định là 123456 nếu chưa set env
+    
+    if (password !== adminPass) {
+        return res.status(401).json({ error: "Sai mật khẩu quản trị!" });
+    }
+
+    // 2. Cấu hình Blog
+    const BLOG_URL = 'https://nhomcongtu.blogspot.com/feeds/posts/default?alt=json&max-results=5'; // Lấy 5 bài mới nhất thôi cho nhanh
+    
+    console.log("🚀 Admin đang kích hoạt đồng bộ Blogger...");
+    let logs = []; // Lưu lại nhật ký để trả về cho điện thoại xem
+    let countNew = 0;
+
+    try {
+        // Tải RSS Feed
+        const response = await axios.get(BLOG_URL);
+        const entries = response.data.feed.entry || [];
+        
+        // Khởi tạo Model Embedding (Dùng key đầu tiên)
+        const genAI = new GoogleGenerativeAI(apiKeys[0]);
+        const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
+
+        for (const entry of entries) {
+            const title = entry.title.$t;
+            const linkObj = entry.link.find(l => l.rel === 'alternate');
+            const url = linkObj ? linkObj.href : "";
+            const contentRaw = entry.content ? entry.content.$t : "";
+
+            if (!url) continue;
+
+            // Kiểm tra tồn tại
+            const { data: existing } = await supabase
+                .from('vn_buddhism_content')
+                .select('id')
+                .eq('url', url)
+                .limit(1);
+
+            if (existing && existing.length > 0) {
+                // logs.push(`⏩ Đã có: ${title.substring(0, 20)}...`);
+                continue; 
+            }
+
+            // Xử lý bài mới
+            logs.push(`🆕 Đang nạp: ${title}`);
+            const plainText = cleanTextSync(contentRaw);
+            const cleanTitle = cleanTextSync(title);
+            const chunks = chunkTextSync(plainText);
+
+            for (const chunkContent of chunks) {
+                try {
+                    const contextChunk = `Tiêu đề bài viết: ${cleanTitle}\nNội dung chi tiết:\n${chunkContent}`;
+                    
+                    const result = await model.embedContent({
+                        content: { parts: [{ text: contextChunk }] },
+                        taskType: "RETRIEVAL_DOCUMENT"
+                    });
+                    
+                    await supabase.from('vn_buddhism_content').insert({
+                        content: contextChunk,
+                        embedding: result.embedding.values,
+                        url: url,
+                        title: cleanTitle
+                    });
+                    
+                    // Nghỉ 1s tránh spam
+                    await new Promise(r => setTimeout(r, 1000));
+                } catch (err) {
+                    console.error("Lỗi chunk:", err.message);
+                }
+            }
+            countNew++;
+        }
+
+        res.json({ 
+            status: "success", 
+            message: `Đã quét xong! Thêm mới ${countNew} bài.`, 
+            logs: logs 
+        });
+
+    } catch (error) {
+        console.error("Lỗi đồng bộ:", error);
+        res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
