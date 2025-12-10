@@ -1,4 +1,4 @@
-// server.js - Phiên bản RAG Thông Minh (Tự động hiểu từ đồng nghĩa)
+// server.js - Phiên bản Hybrid Search: Tự động dịch câu hỏi + Tìm kiếm kép
 
 const express = require('express');
 const axios = require('axios');
@@ -41,7 +41,8 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
         throw new Error("ALL_KEYS_EXHAUSTED");
     }
     const currentKey = apiKeys[keyIndex];
-    const model = "gemini-2.5-flash-lite"; // Dùng bản Flash cho nhanh
+    // Ưu tiên dùng Flash 2.0 cho nhanh
+    const model = "gemini-2.5-flash-lite"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -60,20 +61,16 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- HÀM MỚI: TỐI ƯU HÓA CÂU HỎI (QUAN TRỌNG NHẤT) ---
-// Giúp biến đổi "buổi tối" -> "ban đêm", "làm thịt" -> "sát sanh"...
+// --- HÀM 1: TỐI ƯU HÓA CÂU HỎI (QUAN TRỌNG) ---
+// Giúp biến "buổi tối" -> "ban đêm", "cá" -> "thủy tộc"... để khớp với sách
 async function optimizeQuery(originalQuestion) {
     try {
-        const prompt = `Bạn là chuyên gia tìm kiếm dữ liệu Phật học.
-        Nhiệm vụ: Viết lại câu hỏi của người dùng để tìm kiếm chính xác hơn trong sách vở.
-        
-        Quy tắc:
-        1. Giữ nguyên ý chính.
-        2. Thay từ ngữ đời thường (văn nói) bằng thuật ngữ chính xác hoặc từ đồng nghĩa thường gặp trong văn viết (Ví dụ: "buổi tối" -> "ban đêm", "giết" -> "sát sanh", "cúng" -> "nghi thức").
-        3. CHỈ TRẢ VỀ CÂU HỎI MỚI, không giải thích gì thêm.
+        const prompt = `Bạn là chuyên gia từ điển Phật học.
+        Nhiệm vụ: Viết lại câu hỏi sau bằng các thuật ngữ thường dùng trong kinh sách Phật giáo hoặc từ ngữ phổ thông tương đương.
+        Ví dụ: "thả cá buổi tối" -> "phóng sinh ban đêm".
         
         Câu gốc: "${originalQuestion}"
-        Câu viết lại:`;
+        Câu viết lại (chỉ trả về 1 câu duy nhất):`;
 
         const response = await callGeminiWithRetry({
             contents: [{ parts: [{ text: prompt }] }],
@@ -81,16 +78,14 @@ async function optimizeQuery(originalQuestion) {
         }, 0);
 
         const newQuery = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        console.log(`🔄 Tối ưu câu hỏi: "${originalQuestion}" -> "${newQuery}"`);
         return newQuery || originalQuestion;
 
     } catch (e) {
-        console.error("Lỗi tối ưu query:", e.message);
-        return originalQuestion; // Lỗi thì dùng câu gốc
+        return originalQuestion; 
     }
 }
 
-// --- HÀM TÌM KIẾM SUPABASE ---
+// --- HÀM 2: TÌM KIẾM SUPABASE ---
 async function searchSupabaseContext(query) {
     try {
         if (!supabaseUrl || !supabaseKey) return null;
@@ -98,21 +93,20 @@ async function searchSupabaseContext(query) {
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
-        // Tạo vector cho câu hỏi (lúc này câu hỏi đã được chuẩn hóa)
         const result = await model.embedContent(query);
         const queryVector = result.embedding.values;
 
         // Gọi hàm RPC
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            match_threshold: 0.4, // Để 0.4 là hợp lý cho câu hỏi đã chuẩn hóa
+            match_threshold: 0.25, // <--- SỬA: Hạ xuống 0.25 để bắt dính mọi khả năng
             match_count: 5
         });
 
         if (error) throw error;
 
-        // Log số lượng tìm thấy
-        console.log(`🔍 Tìm thấy ${data ? data.length : 0} kết quả.`);
+        // Log kết quả để kiểm tra
+        console.log(`   -> Tìm kiếm "${query}" ra ${data ? data.length : 0} kết quả.`);
 
         if (!data || data.length === 0) return null;
 
@@ -132,17 +126,27 @@ app.post('/api/chat', async (req, res) => {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        console.log(`\n--- BẮT ĐẦU XỬ LÝ: "${question}" ---`);
+        console.log(`\n=== BẮT ĐẦU XỬ LÝ: "${question}" ===`);
         
-        // 1. BƯỚC MỚI: Dịch câu hỏi sang văn phong sách vở
-        const optimizedQuestion = await optimizeQuery(question);
+        // CHIẾN THUẬT TÌM KIẾM KÉP (HYBRID SEARCH)
+        
+        // Cách 1: Tìm bằng câu hỏi gốc trước
+        let searchResult = await searchSupabaseContext(question);
 
-        // 2. Tìm kiếm bằng câu hỏi ĐÃ TỐI ƯU (tỉ lệ trúng cao hơn hẳn)
-        const searchResult = await searchSupabaseContext(optimizedQuestion);
+        // Cách 2: Nếu không thấy, thử tối ưu câu hỏi (Dịch từ "buổi tối" -> "ban đêm")
+        if (!searchResult) {
+            console.log("⚠️ Cách 1 thất bại. Đang thử tối ưu câu hỏi...");
+            const optimizedQuestion = await optimizeQuery(question);
+            console.log(`🔄 Câu hỏi tối ưu: "${optimizedQuestion}"`);
+            
+            if (optimizedQuestion !== question) {
+                searchResult = await searchSupabaseContext(optimizedQuestion);
+            }
+        }
 
         // --- XỬ LÝ KHI KHÔNG TÌM THẤY ---
         if (!searchResult) {
-            console.log("⚠️ Không tìm thấy dữ liệu.");
+            console.log("❌ Cả 2 cách đều không tìm thấy dữ liệu.");
             return res.json({ 
                 answer: `Đệ tìm trong dữ liệu không thấy thông tin này.<br><br>Mời Sư huynh tra cứu thêm tại mục lục tổng quan:<br><a href="https://mucluc.pmtl.site" target="_blank" style="color:#2563eb; text-decoration:underline; font-weight:bold;">👉 https://mucluc.pmtl.site</a>` 
             });
@@ -184,7 +188,7 @@ app.post('/api/chat', async (req, res) => {
             aiResponse = response.data.candidates[0].content.parts[0].text;
         }
 
-        // Fallback nếu Gemini từ chối trả lời (Recitation)
+        // Fallback diễn giải
         if (!aiResponse || aiResponse.includes("NONE")) {
              const promptDienGiai = `Tóm tắt ý chính trả lời cho câu hỏi: "${question}" dựa trên: \n${context}`;
              response = await callGeminiWithRetry({
