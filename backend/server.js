@@ -1,4 +1,4 @@
-// server.js - Phiên bản Debug & Nới Lỏng Prompt
+// server.js - Phiên bản Hybrid Search: Vector + Keyword (Chính xác tuyệt đối)
 
 const express = require('express');
 const axios = require('axios');
@@ -25,7 +25,6 @@ if (!supabaseUrl || !supabaseKey) {
 }
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- HÀM HỖ TRỢ ---
 function getRandomKey() {
     return apiKeys[Math.floor(Math.random() * apiKeys.length)];
 }
@@ -60,56 +59,78 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- HÀM 1: TỐI ƯU HÓA CÂU HỎI ---
-async function optimizeQuery(originalQuestion) {
+// --- HÀM 1: PHÂN TÍCH & TRÍCH XUẤT TỪ KHÓA ---
+async function analyzeQuery(originalQuestion) {
     try {
-        // Prompt đơn giản hóa để tránh lỗi
-        const prompt = `Viết lại câu: "${originalQuestion}" dùng từ ngữ Phật học chính xác hơn. Chỉ trả về câu mới.`;
+        // Yêu cầu AI vừa viết lại câu hỏi, vừa nhặt từ khóa quan trọng
+        const prompt = `Bạn là chuyên gia tìm kiếm. 
+        Nhiệm vụ: 
+        1. Viết lại câu hỏi dùng thuật ngữ Phật học chính xác (Ví dụ: tối -> ban đêm, giết -> sát sanh).
+        2. Trích xuất 2-3 từ khóa quan trọng nhất để tìm kiếm trong Database (Keywords).
         
+        Trả về định dạng JSON thuần túy:
+        {
+          "rewritten": "câu hỏi đã viết lại",
+          "keywords": ["từ khóa 1", "từ khóa 2"]
+        }
+
+        Câu gốc: "${originalQuestion}"`;
+
         const response = await callGeminiWithRetry({
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0.1 }
+            generationConfig: { responseMimeType: "application/json" } // Bắt buộc trả về JSON
         }, 0);
 
-        const newQuery = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-        return newQuery || originalQuestion;
+        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        const result = JSON.parse(text);
+        return result;
+
     } catch (e) {
-        return originalQuestion; 
+        console.error("Lỗi phân tích query:", e.message);
+        // Fallback nếu lỗi
+        return { rewritten: originalQuestion, keywords: [] }; 
     }
 }
 
-// --- HÀM 2: TÌM KIẾM SUPABASE ---
-async function searchSupabaseContext(query) {
+// --- HÀM 2: TÌM KIẾM VECTOR (Theo ý nghĩa) ---
+async function searchVector(query) {
     try {
-        if (!supabaseUrl || !supabaseKey) return null;
-        
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
-        
         const result = await model.embedContent(query);
-        const queryVector = result.embedding.values;
-
-        // Gọi hàm RPC
         const { data, error } = await supabase.rpc('match_documents', {
-            query_embedding: queryVector,
-            match_threshold: 0.20, // Hạ cực thấp để vơ vét dữ liệu
-            match_count: 8         // Tăng số lượng đoạn văn lấy về
+            query_embedding: result.embedding.values,
+            match_threshold: 0.25, 
+            match_count: 5
+        });
+        if (error) throw error;
+        return data || [];
+    } catch (e) {
+        console.error("Lỗi Vector Search:", e.message);
+        return [];
+    }
+}
+
+// --- HÀM 3: TÌM KIẾM TỪ KHÓA (Theo chữ cái chính xác) ---
+async function searchKeyword(keywords) {
+    if (!keywords || keywords.length === 0) return [];
+    try {
+        console.log(`   -> Đang chạy Keyword Search với: ${JSON.stringify(keywords)}`);
+        
+        // Tạo query tìm kiếm: nội dung phải chứa TẤT CẢ từ khóa
+        let query = supabase.from('vn_buddhism_content').select('content, url').limit(3);
+        
+        // Lặp qua từng từ khóa và thêm điều kiện ILIKE (Case insensitive)
+        keywords.forEach(kw => {
+            query = query.ilike('content', `%${kw}%`);
         });
 
+        const { data, error } = await query;
         if (error) throw error;
-
-        console.log(`   -> Tìm kiếm "${query}" ra ${data ? data.length : 0} kết quả.`);
-
-        if (!data || data.length === 0) return null;
-
-        const topUrl = data[0].url; 
-        const contextText = data.map(doc => doc.content).join("\n\n---\n\n");
-
-        return { text: contextText, url: topUrl };
-
-    } catch (error) {
-        console.error("Lỗi tìm kiếm Supabase:", error);
-        return null; 
+        return data || [];
+    } catch (e) {
+        console.error("Lỗi Keyword Search:", e.message);
+        return [];
     }
 }
 
@@ -120,52 +141,66 @@ app.post('/api/chat', async (req, res) => {
 
         console.log(`\n=== USER HỎI: "${question}" ===`);
         
-        // 1. Tối ưu câu hỏi
-        const optimizedQuestion = await optimizeQuery(question);
-        console.log(`🔄 Bot hiểu là: "${optimizedQuestion}"`);
+        // 1. Phân tích câu hỏi
+        const analysis = await analyzeQuery(question);
+        console.log(`🔍 Phân tích: Rewritten="${analysis.rewritten}" | Keywords=${JSON.stringify(analysis.keywords)}`);
 
-        // 2. Tìm kiếm
-        const searchResult = await searchSupabaseContext(optimizedQuestion);
+        // 2. Chạy SONG SONG cả 2 cách tìm kiếm (Hybrid Search)
+        const [vectorResults, keywordResults] = await Promise.all([
+            searchVector(analysis.rewritten),
+            searchKeyword(analysis.keywords)
+        ]);
+
+        console.log(`   -> Vector tìm thấy: ${vectorResults.length} bài.`);
+        console.log(`   -> Keyword tìm thấy: ${keywordResults.length} bài.`);
+
+        // 3. Gộp kết quả (Ưu tiên Keyword lên đầu vì nó chính xác hơn)
+        // Dùng Map để loại bỏ bài trùng lặp (dựa trên URL hoặc Content)
+        const combinedMap = new Map();
+
+        // Thêm kết quả Keyword trước
+        keywordResults.forEach(item => combinedMap.set(item.url, item));
+        // Thêm kết quả Vector sau (nếu chưa có)
+        vectorResults.forEach(item => {
+            if (!combinedMap.has(item.url)) combinedMap.set(item.url, item);
+        });
+
+        const finalData = Array.from(combinedMap.values()).slice(0, 8); // Lấy tối đa 8 bài
 
         // --- XỬ LÝ KHI KHÔNG TÌM THẤY ---
-        if (!searchResult) {
+        if (finalData.length === 0) {
             console.log("❌ Không tìm thấy dữ liệu nào.");
             return res.json({ 
                 answer: `Đệ tìm không thấy thông tin này trong kho dữ liệu.<br><br>Sư huynh thử tra cứu tại: <a href="https://mucluc.pmtl.site" target="_blank">mucluc.pmtl.site</a>` 
             });
         }
 
-        const context = searchResult.text;
-        const sourceUrl = searchResult.url; 
+        // 4. Chuẩn bị Context
+        // Lấy URL của bài đầu tiên (ưu tiên từ Keyword search)
+        const topUrl = finalData[0].url; 
+        const contextText = finalData.map(doc => doc.content).join("\n\n---\n\n");
 
-        // ⚠️ LOG QUAN TRỌNG: Xem Supabase trả về cái gì?
-        // Bạn hãy nhìn vào Terminal (Logs) xem đoạn text này có chứa câu trả lời không?
-        console.log("------------------------------------------------");
-        console.log("CONTEXT GỬI CHO GEMINI (Trích đoạn):");
-        console.log(context.substring(0, 300) + "..."); // Chỉ in 300 ký tự đầu để kiểm tra
-        console.log("------------------------------------------------");
-
-        // 3. Gọi Gemini (PROMPT MỚI DỄ TÍNH HƠN)
+        // 5. Gọi Gemini Trả lời
         const promptGoc = `Bạn là trợ lý ảo Phật giáo.
         
-        Dữ liệu tham khảo:
+        Dữ liệu tham khảo (Được tìm thấy từ kho tàng thư):
         ---
-        ${context}
+        ${contextText}
         ---
 
-        Câu hỏi của người dùng: "${question}" (Ý hiểu: ${optimizedQuestion})
+        Câu hỏi: "${analysis.rewritten}"
 
         YÊU CẦU:
-        1. Trả lời câu hỏi dựa trên Dữ liệu tham khảo.
-        2. Nếu dữ liệu chỉ chứa tiêu đề hoặc câu hỏi tương tự mà không có câu trả lời rõ ràng: Hãy tự suy luận dựa trên kiến thức Phật học của bạn nhưng phải nói rõ "Theo kiến thức Phật học thường thức...".
-        3. Tuyệt đối không trả lời "Không tìm thấy" nếu bài viết có liên quan đến chủ đề.
-        4. Trả lời ngắn gọn, xưng hô "đệ" và "Sư huynh".
+        1. Trả lời câu hỏi dựa trên Dữ liệu tham khảo. 
+        2. Nếu tìm thấy bài viết đúng chủ đề, hãy tóm tắt ý chính của bài đó để trả lời.
+        3. Nếu dữ liệu mâu thuẫn, hãy ưu tiên bài viết có chứa các từ khóa: ${analysis.keywords.join(", ")}.
+        4. Trả lời ngắn gọn, xưng hô "đệ" - "Sư huynh".
 
         Câu trả lời:`;
 
         let response = await callGeminiWithRetry({
             contents: [{ parts: [{ text: promptGoc }] }],
-            generationConfig: { temperature: 0.3 } // Tăng sáng tạo lên xíu
+            generationConfig: { temperature: 0.3 }
         }, 0);
 
         let aiResponse = "";
@@ -175,8 +210,8 @@ app.post('/api/chat', async (req, res) => {
 
         let finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
 
-        if (sourceUrl && sourceUrl.startsWith('http')) {
-            finalAnswer += `\n\n<br><a href="${sourceUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px;">👉 Xem Thêm Chi Tiết</a>`;
+        if (topUrl && topUrl.startsWith('http')) {
+            finalAnswer += `\n\n<br><a href="${topUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px;">👉 Xem Thêm Chi Tiết</a>`;
         }
 
         res.json({ answer: finalAnswer });
