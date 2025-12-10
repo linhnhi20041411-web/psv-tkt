@@ -1,4 +1,4 @@
-// server.js - Phiên bản Tích hợp Supabase RAG
+// server.js - Phiên bản Tích hợp Supabase RAG + Nút Xem Thêm (Link Source)
 
 const express = require('express');
 const axios = require('axios');
@@ -43,10 +43,10 @@ function getRandomKey() {
     return apiKeys[Math.floor(Math.random() * apiKeys.length)];
 }
 
-// --- 3. HÀM MỚI: TÌM KIẾM CONTEXT TỪ SUPABASE ---
+// --- 3. HÀM MỚI: TÌM KIẾM CONTEXT TỪ SUPABASE (ĐÃ SỬA ĐỂ LẤY URL) ---
 async function searchSupabaseContext(query) {
     try {
-        if (!supabaseUrl || !supabaseKey) return "";
+        if (!supabaseUrl || !supabaseKey) return null; // Sửa thành null để dễ check
         
         // Dùng SDK để tạo Embedding cho câu hỏi
         const genAI = new GoogleGenerativeAI(getRandomKey());
@@ -64,14 +64,20 @@ async function searchSupabaseContext(query) {
 
         if (error) throw error;
 
-        if (!data || data.length === 0) return "";
+        if (!data || data.length === 0) return null;
+
+        // --- CẬP NHẬT MỚI: Lấy URL của kết quả đầu tiên ---
+        const topUrl = data[0].url; 
 
         // Ghép các đoạn văn tìm được thành 1 chuỗi context
-        return data.map(doc => doc.content).join("\n\n---\n\n");
+        const contextText = data.map(doc => doc.content).join("\n\n---\n\n");
+
+        // Trả về Object chứa cả Text và URL
+        return { text: contextText, url: topUrl };
 
     } catch (error) {
         console.error("Lỗi tìm kiếm Supabase:", error);
-        return ""; 
+        return null; 
     }
 }
 
@@ -88,7 +94,7 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 
     const currentKey = apiKeys[keyIndex];
     // Dùng Flash 2.0 (hoặc 1.5-flash tùy bạn chọn)
-    const model = "gemini-2.5-flash"; 
+    const model = "gemini-2.0-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -110,21 +116,22 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 
 app.post('/api/chat', async (req, res) => {
     try {
-        // --- ĐIỂM KHÁC BIỆT QUAN TRỌNG ---
-        // Code cũ: const { question, context } = req.body;
-        // Code mới: Chỉ lấy question
         const { question } = req.body; 
         
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
         console.log(`🔍 Đang tìm dữ liệu cho: "${question}"`);
         
-        // Tự tìm context từ Supabase
-        const context = await searchSupabaseContext(question);
+        // --- CẬP NHẬT MỚI: Xử lý kết quả trả về từ Supabase ---
+        const searchResult = await searchSupabaseContext(question);
 
-        if (!context) {
+        if (!searchResult) {
             return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site ." });
         }
+
+        // Tách Text và URL ra
+        const context = searchResult.text;
+        const sourceUrl = searchResult.url; 
 
         // --- CÁC PHẦN SAU GIỮ NGUYÊN ---
         const safetySettings = [
@@ -193,11 +200,20 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
+        // --- CẬP NHẬT MỚI: GHÉP NÚT XEM THÊM ---
         let finalAnswer = "";
         if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
              finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
         } else {
-            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời :**\n\n" + aiResponse + "\n\n_Nhắc nhở: Sư huynh kiểm tra lại tại: https://tkt.pmtl.site nhé 🙏_";
+            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời :**\n\n" + aiResponse;
+
+            // Kiểm tra và thêm nút nếu có Link
+            if (sourceUrl && sourceUrl.startsWith('http')) {
+                // Style nút bấm màu cam đậm, bo tròn
+                finalAnswer += `\n\n<br><a href="${sourceUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Thêm Chi Tiết</a>`;
+            } else {
+                finalAnswer += "\n\n_Dữ liệu trích xuất từ kho tàng thư._";
+            }
         }
 
         res.json({ answer: finalAnswer });
