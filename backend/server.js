@@ -20,10 +20,15 @@ const supabaseKey = process.env.SUPABASE_KEY;
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- 2. HÀM TÌM KIẾM (ĐÃ NÂNG CẤP TASK TYPE) ---
+// Hàm lấy key ngẫu nhiên để san sẻ tải cho Embedding
+function getRandomKey() {
+    return apiKeys[Math.floor(Math.random() * apiKeys.length)];
+}
+
 async function searchSupabaseContext(query) {
     try {
-        const genAI = new GoogleGenerativeAI(apiKeys[0]); 
+        // --- SỬA ĐỔI: Dùng Key ngẫu nhiên thay vì key đầu tiên ---
+        const genAI = new GoogleGenerativeAI(getRandomKey()); 
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
         // Tạo vector cho tìm kiếm
@@ -33,35 +38,35 @@ async function searchSupabaseContext(query) {
         });
         const queryVector = result.embedding.values;
 
-        // GỌI HÀM HYBRID MỚI (ĐÃ CÓ LOGIC PYTHON)
+        // GỌI HÀM HYBRID
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
-            query_text: query,      // Gửi câu hỏi xuống để chạy Full Text Search
-            match_threshold: 0.15,  // Ngưỡng vector thấp để không sót
-            match_count: 20         // Lấy 20 bài (để Gemini lọc)
+            query_text: query,      
+            match_threshold: 0.15,  
+            match_count: 20         
         });
 
         if (error) {
             console.error("❌ Lỗi Supabase:", error);
+            // Nếu lỗi RPC (Database), ta có thể return null hoặc throw
             return null;
         }
 
         if (!data || data.length === 0) return null;
 
-        console.log("🔍 Kết quả Hybrid:", data.map(d => ({ 
-            id: d.id, 
-            score: d.similarity.toFixed(4), 
-            preview: d.content.substring(0, 30).replace(/\n/g, ' ') + "..."
-        })));
-
+        // ... (Phần xử lý kết quả giữ nguyên) ...
         const topUrl = data[0].url; 
-        
-        // Nối dữ liệu
-        const contextText = data.map(doc => doc.content).join("\n\n--------------------\n\n");
-
+        const contextText = data.map(doc => doc.content).join("\n\n---\n\n");
         return { text: contextText, url: topUrl };
 
     } catch (error) {
+        // Nếu lỗi Embedding (do Key hết hạn), ta có thể thử lại đệ quy đơn giản
+        if (error.message.includes('429')) {
+             console.warn("⚠️ Embedding bị 429, đang thử lại với key khác...");
+             // Tạm nghỉ 1s rồi gọi lại chính nó (sẽ random ra key mới)
+             await new Promise(r => setTimeout(r, 1000));
+             return searchSupabaseContext(query);
+        }
         console.error("Lỗi tìm kiếm:", error);
         return null; 
     }
