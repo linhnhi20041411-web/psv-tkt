@@ -86,7 +86,7 @@ async function searchSupabaseContext(query) {
         const { data, error } = await supabase.rpc('match_documents', {
             query_embedding: queryVector,
             match_threshold: 0.25, 
-            match_count: 5 
+            match_count: 20 
         });
 
         // Ngay sau đoạn gọi rpc ở trên:
@@ -242,45 +242,31 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        // --- CẬP NHẬT MỚI: CẢ 2 TRƯỜNG HỢP ĐỀU CÓ NÚT BẤM ---
+        // --- CẬP NHẬT MỚI: SỬA LỖI HIỂN THỊ HTML ---
         let finalAnswer = "";
 
-        // TRƯỜNG HỢP 1: Không tìm thấy kết quả -> Hiện nút "XEM THÊM" trỏ về Mục lục
+        // TRƯỜNG HỢP 1: Không tìm thấy kết quả -> Nút XEM THÊM (Viết liền 1 dòng)
         if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
              finalAnswer = "Đệ chưa tìm thấy nội dung chi tiết trong kho dữ liệu hiện tại. Mời Sư huynh tra cứu thêm tại mục lục tổng quan:";
              
-             // Thêm nút "XEM THÊM"
-             finalAnswer += `
-                <br>
-                <div style="margin-top: 15px;">
-                    <a href="https://mucluc.pmtl.site" target="_blank" 
-                       style="display:inline-block; background-color:#b45309; color:white; padding:10px 25px; border-radius:30px; text-decoration:none; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s; font-family: sans-serif;">
-                       🔍 Mục Lục
-                    </a>
-                </div>`;
+             // Code nút bấm viết liền, không xuống dòng
+             finalAnswer += `<br><div style="margin-top: 15px;"><a href="https://mucluc.pmtl.site" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 25px; border-radius:30px; text-decoration:none; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s; font-family: sans-serif;">🔍 XEM THÊM</a></div>`;
         } 
         
-        // TRƯỜNG HỢP 2: Tìm thấy kết quả -> Hiện nút "ĐỌC KHAI THỊ" trỏ về bài viết gốc
+        // TRƯỜNG HỢP 2: Tìm thấy kết quả -> Nút ĐỌC KHAI THỊ (Viết liền 1 dòng)
         else {
             finalAnswer = "**Phụng Sự Viên Ảo Trả Lời :**\n\n" + aiResponse;
 
             if (sourceUrl && sourceUrl.startsWith('http')) {
-                // Thêm nút "ĐỌC KHAI THỊ"
-                finalAnswer += `
-                <br>
-                <div style="margin-top: 15px;">
-                    <a href="${sourceUrl}" target="_blank" 
-                       style="display:inline-block; background-color:#b45309; color:white; padding:10px 25px; border-radius:30px; text-decoration:none; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s; font-family: sans-serif;">
-                       📖 Đọc Khai Thị
-                    </a>
-                </div>`;
+                // Code nút bấm viết liền, không xuống dòng
+                finalAnswer += `<br><div style="margin-top: 15px;"><a href="${sourceUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 25px; border-radius:30px; text-decoration:none; font-weight:bold; box-shadow: 0 4px 6px rgba(0,0,0,0.2); transition: all 0.3s; font-family: sans-serif;">📖 Đọc Khai Thị</a></div>`;
             } else {
                 finalAnswer += "\n\n_Dữ liệu trích xuất từ kho tàng thư._";
             }
         }
 
         res.json({ answer: finalAnswer });
-
+        
     } catch (error) {
         console.error("Lỗi:", error);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
