@@ -134,37 +134,38 @@
             userInput.placeholder = "Nhập câu hỏi của bạn...";
         });
 
+        // --- HÀM XỬ LÝ TEXT: GỘP LINK & TẠO NÚT (KHÔNG TREO MÁY) ---
         function linkifyAndSanitize(text) {
             if (typeof text !== 'string') return '';
             
+            // 1. Lọc mã độc (XSS) & lấy HTML
             const sanitizerDiv = document.createElement('div');
             sanitizerDiv.textContent = text;
             let sanitizedText = sanitizerDiv.innerHTML;
 
+            // 2. Format in đậm/nghiêng
             sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
             sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
 
-            // --- LOGIC LỌC TRÙNG THÔNG MINH ---
-            // Nó tìm: (Link A) ...nội dung... (Link A)
-            // \1 có nghĩa là: "Phải giống hệt cái Link A vừa tìm thấy ở trước"
-            // Nếu là Link B, nó sẽ không khớp và không bị gộp.
-            const duplicateRegex = /(https?:\/\/[^\s]+)([\s\S]*?)\1/g;
-            let loopSafety = 0; 
-            let previousText = "";
+            // 3. XỬ LÝ LINK THÔNG MINH (Không dùng vòng lặp while)
+            // Regex bắt link: Bắt đầu bằng http, dừng lại khi gặp khoảng trắng hoặc dấu < (của thẻ HTML) hoặc dấu "
+            const urlRegex = /(https?:\/\/[^\s<"]+)/g;
             
-            while (sanitizedText !== previousText && loopSafety < 10) {
-                previousText = sanitizedText;
-                sanitizedText = sanitizedText.replace(duplicateRegex, "$2$1");
-                loopSafety++;
-            }
+            const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
+                // Kiểm tra xem Link này có xuất hiện lại ở phía sau không?
+                // Nếu tìm thấy link y hệt ở vị trí sau (offset + độ dài link hiện tại)
+                if (fullString.indexOf(url, offset + url.length) !== -1) {
+                    return ""; // XÓA link này đi (để gộp vào cái cuối cùng)
+                }
 
-            const urlRegex = /(https?:\/\/[^\s]+)/g;
-            
-            const linkifiedText = sanitizedText.replace(urlRegex, function(url) {
-                let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
+                // Nếu không tìm thấy (tức là đây là link cuối cùng hoặc duy nhất) -> TẠO NÚT
+                let cleanUrl = url.replace(/[.,;!?)]+$/, ""); // Làm sạch dấu câu cuối link
+                
+                // Trả về nút Nâu Đỏ - Chữ Vàng
                 return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
             });
 
+            // 4. Xuống dòng
             return linkifiedText.replace(/\n/g, '<br>');
         }
 
