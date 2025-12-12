@@ -286,7 +286,86 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
         res.status(500).json({ error: error.message, logs });
     }
 });
+// API: Thêm bài viết thủ công (Manual Add)
+app.post('/api/admin/manual-add', async (req, res) => {
+    const { password, url, title, content } = req.body;
+    const logs = [];
 
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(403).json({ error: "Sai mật khẩu Admin!" });
+    }
+    if (!url || !content) {
+        return res.status(400).json({ error: "Thiếu URL hoặc Nội dung" });
+    }
+
+    try {
+        logs.push(`🚀 Bắt đầu xử lý thủ công bài: "${title}"`);
+
+        // 1. Xóa dữ liệu cũ của bài này (nếu có) để update mới
+        // Chúng ta dùng cột 'url' để định danh bài viết
+        const { error: deleteError } = await supabase
+            .from('vn_buddhism_content')
+            .delete()
+            .eq('url', url);
+
+        if (deleteError) {
+            logs.push(`⚠️ Cảnh báo xóa cũ: ${deleteError.message}`);
+        } else {
+            logs.push(`🧹 Đã dọn dẹp dữ liệu cũ của URL này (nếu có).`);
+        }
+
+        // 2. Xử lý nội dung mới
+        const cleanContent = cleanText(content);
+        const chunks = chunkText(cleanContent);
+        logs.push(`📝 Nội dung đã chia thành ${chunks.length} đoạn.`);
+
+        // 3. Tạo Vector và Lưu từng đoạn
+        let successCount = 0;
+        
+        for (const chunk of chunks) {
+            // Context injection: Gắn tiêu đề vào từng đoạn
+            const contextChunk = `Tiêu đề: ${title}\nNội dung: ${chunk}`;
+
+            try {
+                // Dùng hàm Retry Embedding đã viết ở trên
+                const startIndex = getRandomStartIndex();
+                const embedding = await callEmbeddingWithRetry(contextChunk, startIndex);
+
+                // Insert vào Supabase
+                const { error: insertError } = await supabase
+                    .from('vn_buddhism_content')
+                    .insert({
+                        content: contextChunk,
+                        embedding: embedding,
+                        url: url,
+                        original_id: 0, // 0 đánh dấu là bài thủ công
+                        metadata: { title: title, type: 'manual' }
+                    });
+
+                if (insertError) {
+                    logs.push(`❌ Lỗi lưu đoạn: ${insertError.message}`);
+                } else {
+                    successCount++;
+                }
+
+            } catch (embError) {
+                logs.push(`❌ Lỗi tạo Vector: ${embError.message}`);
+            }
+            
+            // Nghỉ nhẹ 300ms
+            await sleep(300);
+        }
+
+        res.json({ 
+            message: `Thành công! Đã lưu ${successCount}/${chunks.length} đoạn văn bản.`, 
+            logs: logs 
+        });
+
+    } catch (error) {
+        console.error("Lỗi Manual Add:", error);
+        res.status(500).json({ error: error.message, logs });
+    }
+});
 app.listen(PORT, () => {
     console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
