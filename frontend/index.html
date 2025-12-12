@@ -142,41 +142,36 @@
             userInput.placeholder = "Nhập câu hỏi của bạn...";
         });
 
-		function linkifyAndSanitize(text) {
-		    if (typeof text !== 'string') return '';
-		    
-		    // Tạo element ảo để lọc mã độc (XSS protection)
-		    const sanitizerDiv = document.createElement('div');
-		    sanitizerDiv.textContent = text;
-		    let sanitizedText = sanitizerDiv.innerHTML;
-		
-		    // 1. Format in đậm (**text**)
-		    sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
-		    
-		    // 2. Format in nghiêng (_text_)
-		    sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
-		
-		    // 3. XỬ LÝ LINK (ĐÃ FIX LỖI CẮT LINK _27.html)
-		    // Regex mới này bắt tất cả ký tự không phải khoảng trắng
-		    const urlRegex = /(https?:\/\/[^\s]+)/g;
-		    
-		    const linkifiedText = sanitizedText.replace(urlRegex, function(url) {
-		        // Loại bỏ các dấu câu thường gặp ở cuối câu nếu bị dính vào link
-		        // Ví dụ: link. -> link
-		        let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
-		        
-		        // Trả về nút bấm nằm ở dòng mới (<br> ở trước)
-		        // class="tiny-btn" đã được chỉnh màu Nâu Đỏ - Chữ Vàng
-		        return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
-		    });
-		
-		    // 4. Xuống dòng văn bản thường
-		    return linkifiedText.replace(/\n/g, '<br>');
-		}
-		
-		    // 4. Xuống dòng
-		    return linkifiedText.replace(/\n/g, '<br>');
-		}
+		// --- HÀM XỬ LÝ TEXT VÀ LINK (ĐÃ SỬA LỖI DUPLICATE) ---
+        function linkifyAndSanitize(text) {
+            if (typeof text !== 'string') return '';
+            
+            // Tạo element ảo để lọc mã độc (XSS protection)
+            const sanitizerDiv = document.createElement('div');
+            sanitizerDiv.textContent = text;
+            let sanitizedText = sanitizerDiv.innerHTML;
+
+            // 1. Format in đậm (**text**)
+            sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
+            
+            // 2. Format in nghiêng (_text_)
+            sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
+
+            // 3. XỬ LÝ LINK (FIX LỖI CẮT LINK _27.html)
+            // Regex bắt tất cả ký tự không phải khoảng trắng
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            
+            const linkifiedText = sanitizedText.replace(urlRegex, function(url) {
+                // Loại bỏ các dấu câu ở cuối link
+                let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
+                
+                // Trả về nút bấm màu Nâu Đỏ - Chữ Vàng, có xuống dòng (<br>)
+                return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
+            });
+
+            // 4. Xuống dòng văn bản thường
+            return linkifiedText.replace(/\n/g, '<br>');
+        }
 
 		function addMessage(message, sender, type = 'normal') {
             const messageWrapper = document.createElement('div');
