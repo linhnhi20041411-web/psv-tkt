@@ -58,7 +58,7 @@
     </div>
 
     <script>
-        const API_URL = "https://psv-tkt.onrender.com"; // Thay bằng link Render của bạn
+        const API_URL = "https://psv-tkt.onrender.com"; 
 
         function switchTab(tab) {
             if (tab === 'auto') {
@@ -110,7 +110,7 @@
             }
         }
 
-        // --- HÀM 2: THÊM THỦ CÔNG (MỚI) ---
+        // --- HÀM 2: THÊM THỦ CÔNG (ĐÃ SỬA LỖI PASS) ---
         async function manualAdd() {
             const pass = document.getElementById('password').value;
             const url = document.getElementById('manualUrl').value;
@@ -129,7 +129,8 @@
                 const response = await fetch(`${API_URL}/api/admin/manual-add`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password, url, title, content })
+                    // SỬA Ở ĐÂY: password: pass (lấy giá trị từ biến pass)
+                    body: JSON.stringify({ password: pass, url, title, content })
                 });
                 const data = await response.json();
 
