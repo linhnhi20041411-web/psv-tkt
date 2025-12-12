@@ -8,45 +8,88 @@
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen p-4">
 
-    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-md">
-        <h1 class="text-2xl font-bold text-gray-800 mb-2 text-center">⚙️ Quản Lý Dữ Liệu</h1>
-        <p class="text-gray-500 text-sm text-center mb-6">Đồng bộ bài viết mới từ Blogger về Chatbot</p>
+    <div class="bg-white p-6 rounded-xl shadow-lg w-full max-w-2xl">
+        <h1 class="text-2xl font-bold text-gray-800 mb-2 text-center">⚙️ Quản Lý Dữ Liệu AI</h1>
+        
+        <div class="flex border-b border-gray-200 mb-6">
+            <button onclick="switchTab('auto')" id="tabAuto" class="flex-1 py-2 px-4 text-center text-amber-600 border-b-2 border-amber-600 font-bold focus:outline-none">Đồng Bộ Tự Động</button>
+            <button onclick="switchTab('manual')" id="tabManual" class="flex-1 py-2 px-4 text-center text-gray-500 hover:text-amber-600 font-medium focus:outline-none">Thêm Thủ Công</button>
+        </div>
 
-        <div class="space-y-4">
-            <div>
-                <label class="block text-sm font-medium text-gray-700 mb-1">Mật khẩu Admin</label>
-                <input type="password" id="password" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none" placeholder="Nhập mật khẩu...">
-            </div>
+        <div class="mb-4">
+            <label class="block text-sm font-medium text-gray-700 mb-1">Mật khẩu Admin (*)</label>
+            <input type="password" id="password" class="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-amber-500 outline-none" placeholder="Nhập mật khẩu...">
+        </div>
 
+        <div id="contentAuto" class="space-y-4">
+            <p class="text-gray-500 text-sm">Quét và đồng bộ bài viết mới nhất từ nguồn dữ liệu (Blogger/Database).</p>
             <button onclick="startSync()" id="btnSync" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-lg transition duration-300 flex justify-center items-center">
                 🔄 Cập Nhật Bài Mới Ngay
             </button>
         </div>
 
+        <div id="contentManual" class="hidden space-y-4">
+            <p class="text-gray-500 text-sm">Thêm hoặc cập nhật lại một bài viết cụ thể vào trí nhớ của AI.</p>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700">URL Bài Viết</label>
+                <input type="text" id="manualUrl" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-amber-500" placeholder="https://...">
+            </div>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Tiêu Đề</label>
+                <input type="text" id="manualTitle" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-amber-500" placeholder="Tiêu đề bài viết...">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Nội Dung Chi Tiết</label>
+                <textarea id="manualContent" rows="6" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-amber-500" placeholder="Paste toàn bộ nội dung bài viết vào đây..."></textarea>
+            </div>
+
+            <button onclick="manualAdd()" id="btnManual" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition duration-300 flex justify-center items-center">
+                💾 Lưu Vào Database
+            </button>
+        </div>
+
         <div id="statusArea" class="mt-6 hidden">
             <h3 class="font-bold text-gray-700 mb-2">Nhật ký hoạt động:</h3>
-            <div id="logs" class="bg-gray-900 text-green-400 text-xs p-4 rounded-lg h-48 overflow-y-auto font-mono">
-                </div>
+            <div id="logs" class="bg-gray-900 text-green-400 text-xs p-4 rounded-lg h-48 overflow-y-auto font-mono whitespace-pre-wrap"></div>
         </div>
     </div>
 
     <script>
-        // CẤU HÌNH URL SERVER CỦA HUYNH
-        const API_URL = "https://psv-tkt.onrender.com"; // Thay bằng link Render của huynh nếu khác
+        const API_URL = "https://psv-tkt.onrender.com"; // Thay bằng link Render của bạn
 
+        function switchTab(tab) {
+            if (tab === 'auto') {
+                document.getElementById('contentAuto').classList.remove('hidden');
+                document.getElementById('contentManual').classList.add('hidden');
+                document.getElementById('tabAuto').className = "flex-1 py-2 px-4 text-center text-amber-600 border-b-2 border-amber-600 font-bold focus:outline-none";
+                document.getElementById('tabManual').className = "flex-1 py-2 px-4 text-center text-gray-500 hover:text-amber-600 font-medium focus:outline-none";
+            } else {
+                document.getElementById('contentAuto').classList.add('hidden');
+                document.getElementById('contentManual').classList.remove('hidden');
+                document.getElementById('tabAuto').className = "flex-1 py-2 px-4 text-center text-gray-500 hover:text-amber-600 font-medium focus:outline-none";
+                document.getElementById('tabManual').className = "flex-1 py-2 px-4 text-center text-amber-600 border-b-2 border-amber-600 font-bold focus:outline-none";
+            }
+        }
+
+        function log(msg) {
+            const logBox = document.getElementById('logs');
+            document.getElementById('statusArea').classList.remove('hidden');
+            logBox.innerHTML += msg + "\n";
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        // --- HÀM 1: ĐỒNG BỘ TỰ ĐỘNG ---
         async function startSync() {
             const pass = document.getElementById('password').value;
             if (!pass) return alert("Vui lòng nhập mật khẩu!");
 
             const btn = document.getElementById('btnSync');
-            const statusArea = document.getElementById('statusArea');
-            const logBox = document.getElementById('logs');
-
-            // Giao diện đang chạy
             btn.disabled = true;
-            btn.innerHTML = `<svg class="animate-spin h-5 w-5 mr-3 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Đang xử lý...`;
-            statusArea.classList.remove('hidden');
-            logBox.innerHTML = "> Bắt đầu kết nối tới Server...\n";
+            btn.innerHTML = `⏳ Đang xử lý...`;
+            document.getElementById('logs').innerHTML = "> Bắt đầu đồng bộ tự động...\n";
 
             try {
                 const response = await fetch(`${API_URL}/api/admin/sync-blogger`, {
@@ -54,26 +97,50 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ password: pass })
                 });
-
                 const data = await response.json();
-
-                if (!response.ok) {
-                    logBox.innerHTML += `❌ LỖI: ${data.error || "Không xác định"}\n`;
-                } else {
-                    logBox.innerHTML += `✅ ${data.message}\n`;
-                    if (data.logs && data.logs.length > 0) {
-                        data.logs.forEach(line => logBox.innerHTML += `+ ${line}\n`);
-                    } else {
-                        logBox.innerHTML += "> Không có bài viết mới nào cần cập nhật.\n";
-                    }
-                    logBox.innerHTML += "\n=== HOÀN TẤT ===";
-                }
+                
+                if (data.logs) data.logs.forEach(l => log(l));
+                log(response.ok ? "✅ HOÀN TẤT!" : `❌ LỖI: ${data.error}`);
 
             } catch (error) {
-                logBox.innerHTML += `❌ Lỗi mạng: ${error.message}\n`;
+                log(`❌ Lỗi mạng: ${error.message}`);
             } finally {
                 btn.disabled = false;
                 btn.innerHTML = "🔄 Cập Nhật Bài Mới Ngay";
+            }
+        }
+
+        // --- HÀM 2: THÊM THỦ CÔNG (MỚI) ---
+        async function manualAdd() {
+            const pass = document.getElementById('password').value;
+            const url = document.getElementById('manualUrl').value;
+            const title = document.getElementById('manualTitle').value;
+            const content = document.getElementById('manualContent').value;
+
+            if (!pass) return alert("Thiếu mật khẩu!");
+            if (!url || !title || !content) return alert("Vui lòng nhập đầy đủ thông tin!");
+
+            const btn = document.getElementById('btnManual');
+            btn.disabled = true;
+            btn.innerHTML = `⏳ Đang vector hóa...`;
+            document.getElementById('logs').innerHTML = `> Đang xử lý bài: ${title}...\n`;
+
+            try {
+                const response = await fetch(`${API_URL}/api/admin/manual-add`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password, url, title, content })
+                });
+                const data = await response.json();
+
+                if (data.logs) data.logs.forEach(l => log(l));
+                log(response.ok ? "✅ ĐÃ LƯU THÀNH CÔNG!" : `❌ LỖI: ${data.error}`);
+
+            } catch (error) {
+                log(`❌ Lỗi mạng: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = "💾 Lưu Vào Database";
             }
         }
     </script>
