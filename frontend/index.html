@@ -176,7 +176,7 @@
 		    return linkifiedText.replace(/\n/g, '<br>');
 		}
 
-        function addMessage(message, sender, type = 'normal') {
+		function addMessage(message, sender, type = 'normal') {
             const messageWrapper = document.createElement('div');
             messageWrapper.classList.add('message', 'mb-4', 'flex', 'w-full');
             const messageBubble = document.createElement('div');
@@ -197,15 +197,12 @@
             }
 
             const contentP = document.createElement('p');
-			// NẾU LÀ BOT: Cho phép hiển thị HTML (để hiện nút bấm)
-            if (sender === 'bot') {
-                // Chỉ chuyển đổi xuống dòng \n thành <br>, giữ nguyên các thẻ HTML khác
-                contentP.innerHTML = message.replace(/\n/g, '<br>'); 
-            } 
-            // NẾU LÀ USER: Lọc mã độc như cũ
-            else {
-                contentP.innerHTML = linkifyAndSanitize(message);
-            }
+
+            // --- ĐÂY LÀ CHỖ QUAN TRỌNG NHẤT ĐÃ SỬA ---
+            // Áp dụng hàm biến link thành nút (linkifyAndSanitize) cho CẢ BOT VÀ USER
+            contentP.innerHTML = linkifyAndSanitize(message);
+            // ------------------------------------------
+
             messageBubble.appendChild(contentP);
             messageWrapper.appendChild(messageBubble);
             chatMessages.appendChild(messageWrapper);
