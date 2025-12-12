@@ -17,15 +17,15 @@ const rawKeys = process.env.GEMINI_API_KEYS || "";
 const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.length > 0);
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
-// Mật khẩu mặc định nếu quên đặt trên Render
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "123456"; 
 
 if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL hoặc SUPABASE_KEY");
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-function getRandomKey() {
-    return apiKeys[Math.floor(Math.random() * apiKeys.length)];
+// Hàm tiện ích: Lấy key ngẫu nhiên (chỉ dùng cho lần gọi đầu tiên)
+function getRandomStartIndex() {
+    return Math.floor(Math.random() * apiKeys.length);
 }
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -62,48 +62,90 @@ function chunkText(text, maxChunkSize = 2000) {
     return chunks;
 }
 
-// --- 3. API CHAT (HYBRID SEARCH) ---
-async function searchSupabaseContext(query) {
+// --- 3. LOGIC RETRY CHO EMBEDDING (MỚI THÊM) ---
+async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
+    // Nếu đã thử hết các key trong danh sách
+    if (retryCount >= apiKeys.length) {
+        throw new Error("❌ Đã thử tất cả API Keys nhưng đều bị giới hạn (429) hoặc lỗi.");
+    }
+
+    // Xử lý vòng tròn index: Nếu keyIndex vượt quá độ dài mảng thì quay về 0
+    const currentIndex = keyIndex % apiKeys.length;
+    const currentKey = apiKeys[currentIndex];
+
     try {
-        const genAI = new GoogleGenerativeAI(getRandomKey());
+        const genAI = new GoogleGenerativeAI(currentKey);
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
-        const result = await model.embedContent(query);
-        const queryVector = result.embedding.values;
+        const result = await model.embedContent(text);
+        return result.embedding.values;
+
+    } catch (error) {
+        // Kiểm tra lỗi 429 từ SDK Google
+        const isQuotaError = error.message?.includes('429') || error.status === 429 || error.message?.includes('quota');
+        
+        if (isQuotaError) {
+            console.warn(`⚠️ Key ${currentIndex} bị 429 (Embedding). Đổi sang Key kế tiếp...`);
+            await sleep(500); // Nghỉ nhẹ
+            // Thử lại với key kế tiếp
+            return callEmbeddingWithRetry(text, currentIndex + 1, retryCount + 1);
+        }
+        
+        // Nếu lỗi khác (không phải quota), ném lỗi ra luôn
+        throw error;
+    }
+}
+
+// --- 4. HÀM TÌM KIẾM (ĐÃ CẬP NHẬT GỌI HÀM RETRY) ---
+async function searchSupabaseContext(query) {
+    try {
+        // Bắt đầu thử từ một key ngẫu nhiên để phân tải
+        const startIndex = getRandomStartIndex();
+        
+        // Gọi hàm Embedding có cơ chế Retry
+        const queryVector = await callEmbeddingWithRetry(query, startIndex);
 
         // Gọi hàm SQL hybrid_search
         const { data, error } = await supabase.rpc('hybrid_search', {
             query_text: query,
             query_embedding: queryVector,
             match_count: 10,
-            rrf_k: 60 // Tham số mặc định của RRF
+            rrf_k: 60
         });
 
         if (error) throw error;
         return data && data.length > 0 ? data : null;
 
     } catch (error) {
-        console.error("Lỗi tìm kiếm:", error);
+        console.error("Lỗi tìm kiếm:", error.message);
         return null; 
     }
 }
 
-async function callGeminiChat(payload, keyIndex = 0) {
-    if (keyIndex >= apiKeys.length) throw new Error("Hết Key Gemini");
-    const currentKey = apiKeys[keyIndex];
+// --- 5. LOGIC RETRY CHO CHAT (GIỮ NGUYÊN) ---
+async function callGeminiChat(payload, keyIndex = 0, retryCount = 0) {
+    if (retryCount >= apiKeys.length) throw new Error("Hết Key Gemini cho Chat");
+
+    const currentIndex = keyIndex % apiKeys.length;
+    const currentKey = apiKeys[currentIndex];
+    
     const model = "gemini-2.5-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
         return await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
     } catch (error) {
+        // Kiểm tra lỗi 429 từ Axios
         if (error.response && error.response.status === 429) {
+            console.warn(`⚠️ Key ${currentIndex} bị 429 (Chat). Đổi sang Key kế tiếp...`);
             await sleep(1000);
-            return callGeminiChat(payload, keyIndex + 1);
+            return callGeminiChat(payload, currentIndex + 1, retryCount + 1);
         }
         throw error;
     }
 }
+
+// --- 6. API ENDPOINTS ---
 
 app.post('/api/chat', async (req, res) => {
     try {
@@ -120,7 +162,6 @@ app.post('/api/chat', async (req, res) => {
         let primaryUrl = documents[0].url;
 
         documents.forEach((doc, index) => {
-            // Quan trọng: Đưa link vào ngay context để AI trích dẫn
             contextString += `
             --- Nguồn #${index + 1} ---
             Link gốc: ${doc.url || 'N/A'}
@@ -144,15 +185,16 @@ app.post('/api/chat', async (req, res) => {
         Câu hỏi: ${question}
         `;
 
+        // Bắt đầu chat từ một key ngẫu nhiên
+        const startIndex = getRandomStartIndex();
         const response = await callGeminiChat({
             contents: [{ parts: [{ text: systemPrompt }] }]
-        });
+        }, startIndex);
 
         let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
         
         let finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
         
-        // Thêm nút xem thêm đẹp mắt
         if (primaryUrl && primaryUrl.startsWith('http')) {
              finalAnswer += `\n\n<br><a href="${primaryUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:8px 16px; border-radius:20px; text-decoration:none; font-weight:bold; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Bài Gốc Khớp Nhất</a>`;
         }
@@ -160,12 +202,12 @@ app.post('/api/chat', async (req, res) => {
         res.json({ answer: finalAnswer });
 
     } catch (error) {
-        console.error("Lỗi Chat:", error);
+        console.error("Lỗi Chat Server:", error.message);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
-// --- 4. API ADMIN SYNC (Đã tối ưu) ---
+// API Admin Sync (Cũng cần dùng Embedding Retry)
 app.post('/api/admin/sync-blogger', async (req, res) => {
     const { password } = req.body;
     const logs = [];
@@ -175,7 +217,6 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
     }
 
     try {
-        // Lấy 20 bài mới nhất từ bảng 'articles' (bảng trung gian chứa dữ liệu Blogger)
         const { data: sourcePosts, error: sourceError } = await supabase
             .from('articles') 
             .select('*')
@@ -185,13 +226,9 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
         if (sourceError) throw new Error("Lỗi đọc bảng articles: " + sourceError.message);
         if (!sourcePosts || sourcePosts.length === 0) return res.json({ message: "Bảng articles đang trống.", logs });
 
-        const genAI = new GoogleGenerativeAI(getRandomKey());
-        const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
-
         let processedCount = 0;
 
         for (const post of sourcePosts) {
-            // Kiểm tra trùng lặp dựa trên ID bài viết gốc
             const { count } = await supabase
                 .from('vn_buddhism_content')
                 .select('*', { count: 'exact', head: true })
@@ -211,28 +248,30 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
             const cleanContent = cleanText(rawContent);
             const chunks = chunkText(cleanContent);
             
-            logs.push(`⚙️ Đang xử lý bài: "${title.substring(0, 30)}..." (${chunks.length} chunks)`);
+            logs.push(`⚙️ Đang xử lý bài: "${title.substring(0, 30)}..."`);
 
             for (const chunk of chunks) {
                 const contextChunk = `Tiêu đề: ${title}\nNội dung: ${chunk}`;
                 
-                // Tạo Vector
-                const result = await model.embedContent(contextChunk);
-                const embedding = result.embedding.values;
+                try {
+                    // DÙNG HÀM EMBEDDING CÓ RETRY
+                    const startIndex = getRandomStartIndex();
+                    const embedding = await callEmbeddingWithRetry(contextChunk, startIndex);
 
-                // Lưu vào Supabase (ĐÃ BẬT METADATA)
-                const { error: insertError } = await supabase
-                    .from('vn_buddhism_content')
-                    .insert({
-                        content: contextChunk,
-                        embedding: embedding,
-                        url: url,
-                        original_id: post.id,
-                        metadata: { title: title } // Quan trọng: Lưu tiêu đề để sau này dễ quản lý
-                    });
-                
-                if (insertError) {
-                    logs.push(`❌ Lỗi lưu chunk: ${insertError.message}`);
+                    const { error: insertError } = await supabase
+                        .from('vn_buddhism_content')
+                        .insert({
+                            content: contextChunk,
+                            embedding: embedding,
+                            url: url,
+                            original_id: post.id,
+                            metadata: { title: title }
+                        });
+                    
+                    if (insertError) logs.push(`❌ Lỗi lưu DB: ${insertError.message}`);
+
+                } catch (embError) {
+                    logs.push(`❌ Lỗi tạo Vector: ${embError.message}`);
                 }
             }
             processedCount++;
@@ -240,7 +279,7 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
         }
 
         res.json({ 
-            message: `Hoàn tất! Đã thêm mới ${processedCount} bài viết vào bộ nhớ AI.`, 
+            message: `Hoàn tất! Đã thêm mới ${processedCount} bài viết.`, 
             logs: logs 
         });
 
