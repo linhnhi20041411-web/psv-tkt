@@ -1,5 +1,3 @@
-// server.js - Phiên bản Hybrid Search RAG (Đã tối ưu cho Node.js)
-
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
@@ -10,16 +8,20 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-app.use(cors());
+// Tăng giới hạn body để nhận dữ liệu lớn
 app.use(express.json({ limit: '50mb' }));
+app.use(cors());
 
 // --- 1. CẤU HÌNH ---
 const rawKeys = process.env.GEMINI_API_KEYS || "";
 const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.length > 0);
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
+// Mật khẩu mặc định nếu quên đặt trên Render
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "123456"; 
 
 if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL hoặc SUPABASE_KEY");
+
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 function getRandomKey() {
@@ -28,35 +30,57 @@ function getRandomKey() {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- 2. HÀM TÌM KIẾM MỚI (HYBRID SEARCH) ---
+// --- 2. CÁC HÀM XỬ LÝ TEXT ---
+function cleanText(text) {
+    if (!text) return "";
+    let clean = text
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/p>/gi, '\n')
+        .replace(/<[^>]*>?/gm, '') 
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\r\n/g, '\n');   
+    return clean.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+}
+
+function chunkText(text, maxChunkSize = 2000) {
+    if (!text) return [];
+    const paragraphs = text.split(/\n\s*\n/);
+    const chunks = [];
+    let currentChunk = "";
+    
+    for (const p of paragraphs) {
+        const cleanP = p.trim();
+        if (!cleanP) continue;
+        if ((currentChunk.length + cleanP.length) < maxChunkSize) {
+            currentChunk += (currentChunk ? "\n\n" : "") + cleanP;
+        } else {
+            if (currentChunk.length > 50) chunks.push(currentChunk);
+            currentChunk = cleanP;
+        }
+    }
+    if (currentChunk.length > 50) chunks.push(currentChunk);
+    return chunks;
+}
+
+// --- 3. API CHAT (HYBRID SEARCH) ---
 async function searchSupabaseContext(query) {
     try {
-        if (!supabaseUrl || !supabaseKey) return null;
-        
-        // Tạo Embedding cho câu hỏi
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
         const result = await model.embedContent(query);
         const queryVector = result.embedding.values;
 
-        // Gọi hàm hybrid_search (Thay vì match_documents cũ)
-        // Lưu ý: Không dùng threshold để tránh lọc mất kết quả tiềm năng
+        // Gọi hàm SQL hybrid_search
         const { data, error } = await supabase.rpc('hybrid_search', {
-            query_text: query,              // Để tìm từ khóa
-            query_embedding: queryVector,   // Để tìm ngữ nghĩa
-            match_count: 10                 // Lấy 10 đoạn tốt nhất để Gemini lọc
+            query_text: query,
+            query_embedding: queryVector,
+            match_count: 10,
+            rrf_k: 60 // Tham số mặc định của RRF
         });
 
-        if (error) {
-            console.error("Lỗi Supabase RPC:", error);
-            throw error;
-        }
-
-        if (!data || data.length === 0) return null;
-
-        // Trả về danh sách đầy đủ để xử lý ở bước sau
-        return data; 
+        if (error) throw error;
+        return data && data.length > 0 ? data : null;
 
     } catch (error) {
         console.error("Lỗi tìm kiếm:", error);
@@ -64,33 +88,18 @@ async function searchSupabaseContext(query) {
     }
 }
 
-// --- 3. GỌI GEMINI ---
-async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
-    if (keyIndex >= apiKeys.length) {
-        if (retryCount < 1) {
-            await sleep(2000);
-            return callGeminiWithRetry(payload, 0, retryCount + 1);
-        }
-        throw new Error("ALL_KEYS_EXHAUSTED");
-    }
-
+async function callGeminiChat(payload, keyIndex = 0) {
+    if (keyIndex >= apiKeys.length) throw new Error("Hết Key Gemini");
     const currentKey = apiKeys[keyIndex];
-    // Dùng Flash 2.0 cho nhanh và thông minh hơn
     const model = "gemini-2.5-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
-        const response = await axios.post(apiUrl, payload, {
-            headers: { 'Content-Type': 'application/json' },
-            timeout: 60000 
-        });
-        return response;
+        return await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' } });
     } catch (error) {
-        const status = error.response ? error.response.status : 0;
-        if (status === 429 || status >= 500) {
-            console.warn(`⚠️ Key ${keyIndex} lỗi (Mã: ${status}). Đổi Key...`);
-            await sleep(1000); 
-            return callGeminiWithRetry(payload, keyIndex + 1, retryCount);
+        if (error.response && error.response.status === 429) {
+            await sleep(1000);
+            return callGeminiChat(payload, keyIndex + 1);
         }
         throw error;
     }
@@ -101,77 +110,146 @@ app.post('/api/chat', async (req, res) => {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        console.log(`🔍 User hỏi: "${question}"`);
-        
-        // 1. Tìm kiếm dữ liệu
         const documents = await searchSupabaseContext(question);
 
         if (!documents) {
             return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" });
         }
 
-        // 2. Xây dựng Context String thông minh (Kèm Link)
-        // Chúng ta sẽ ghép Link ngay vào đoạn văn để Gemini biết trích dẫn
         let contextString = "";
-        let primaryUrl = documents[0].url; // Lấy URL của bài khớp nhất làm nút "Xem thêm" chính
+        let primaryUrl = documents[0].url;
 
         documents.forEach((doc, index) => {
+            // Quan trọng: Đưa link vào ngay context để AI trích dẫn
             contextString += `
-            --- Nguồn tham khảo #${index + 1} ---
-            Link gốc: ${doc.url || 'Không có link'}
+            --- Nguồn #${index + 1} ---
+            Link gốc: ${doc.url || 'N/A'}
             Nội dung: ${doc.content}
             `;
         });
 
-        // 3. Prompt Engineering (Kỹ thuật ép trích dẫn)
         const systemPrompt = `
-        Bạn là Phụng Sự Viên Ảo của trang "Tìm Khai Thị" (Pháp Môn Tâm Linh).
+        Bạn là Phụng Sự Viên Ảo của trang "Tìm Khai Thị".
+        Nhiệm vụ: Trả lời câu hỏi dựa trên context bên dưới.
         
-        NHIỆM VỤ: Trả lời câu hỏi của người dùng dựa trên "THÔNG TIN THAM KHẢO" bên dưới.
+        Yêu cầu BẮT BUỘC:
+        1. Chỉ dùng thông tin trong context.
+        2. Sau mỗi ý trả lời, BẮT BUỘC ghi chú link nguồn bên cạnh. Ví dụ: "...cần tịnh tâm (Xem: URL)".
+        3. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh/tỷ".
+        4. Nếu không tìm thấy câu trả lời trong context, hãy nói khéo là chưa tìm thấy và mời xem mục lục.
         
-        QUY TẮC BẮT BUỘC:
-        1. **Trung thực:** Chỉ dùng thông tin trong context. Nếu không có thông tin, hãy hướng dẫn người dùng vào trang mục lục (https://mucluc.pmtl.site).
-        2. **Trích dẫn Link (QUAN TRỌNG):** - Sau mỗi ý hoặc đoạn thông tin lấy từ nguồn nào, bạn PHẢI để link nguồn đó ngay bên cạnh.
-           - Ví dụ: "Niệm kinh cần tịnh tâm [Xem chi tiết](URL_NGUỒN)".
-        3. **Văn phong:** Xưng "đệ", gọi "Sư huynh/Sư tỷ", khiêm cung, nhẹ nhàng.
-        4. **Định dạng:** Dùng Markdown, gạch đầu dòng cho dễ đọc.
-
-        --- THÔNG TIN THAM KHẢO ---
+        Context:
         ${contextString}
-        --- HẾT THÔNG TIN ---
-
+        
         Câu hỏi: ${question}
-        Trả lời:
         `;
 
-        const response = await callGeminiWithRetry({
-            contents: [{ parts: [{ text: systemPrompt }] }],
-            generationConfig: { temperature: 0.3 }
-        }, 0);
+        const response = await callGeminiChat({
+            contents: [{ parts: [{ text: systemPrompt }] }]
+        });
 
-        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-        // Fallback nếu Gemini không trả lời
-        if (!aiResponse) {
-             aiResponse = "Hiện tại đệ chưa kết nối được với kho dữ liệu. Sư huynh thử lại sau nhé.";
-        }
-
-        // 4. Xử lý kết quả trả về
+        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
+        
         let finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
         
-        // Thêm nút xem thêm (dẫn đến bài viết khớp nhất)
+        // Thêm nút xem thêm đẹp mắt
         if (primaryUrl && primaryUrl.startsWith('http')) {
-             finalAnswer += `\n\n<br><a href="${primaryUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Đọc Bài Viết Gốc Tốt Nhất</a>`;
+             finalAnswer += `\n\n<br><a href="${primaryUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:8px 16px; border-radius:20px; text-decoration:none; font-weight:bold; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Bài Gốc Khớp Nhất</a>`;
         }
 
         res.json({ answer: finalAnswer });
 
     } catch (error) {
-        console.error("Lỗi Server:", error);
+        console.error("Lỗi Chat:", error);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
+// --- 4. API ADMIN SYNC (Đã tối ưu) ---
+app.post('/api/admin/sync-blogger', async (req, res) => {
+    const { password } = req.body;
+    const logs = [];
+
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(403).json({ error: "Sai mật khẩu Admin!" });
+    }
+
+    try {
+        // Lấy 20 bài mới nhất từ bảng 'articles' (bảng trung gian chứa dữ liệu Blogger)
+        const { data: sourcePosts, error: sourceError } = await supabase
+            .from('articles') 
+            .select('*')
+            .order('id', { ascending: false }) 
+            .limit(20);
+
+        if (sourceError) throw new Error("Lỗi đọc bảng articles: " + sourceError.message);
+        if (!sourcePosts || sourcePosts.length === 0) return res.json({ message: "Bảng articles đang trống.", logs });
+
+        const genAI = new GoogleGenerativeAI(getRandomKey());
+        const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
+
+        let processedCount = 0;
+
+        for (const post of sourcePosts) {
+            // Kiểm tra trùng lặp dựa trên ID bài viết gốc
+            const { count } = await supabase
+                .from('vn_buddhism_content')
+                .select('*', { count: 'exact', head: true })
+                .eq('original_id', post.id);
+
+            if (count > 0) {
+                logs.push(`⚠️ Bỏ qua bài ID ${post.id}: Đã có trong Database.`);
+                continue;
+            }
+
+            const rawContent = post.content || "";
+            const title = post.title || "No Title";
+            const url = post.url || "";
+            
+            if (rawContent.length < 50) continue;
+
+            const cleanContent = cleanText(rawContent);
+            const chunks = chunkText(cleanContent);
+            
+            logs.push(`⚙️ Đang xử lý bài: "${title.substring(0, 30)}..." (${chunks.length} chunks)`);
+
+            for (const chunk of chunks) {
+                const contextChunk = `Tiêu đề: ${title}\nNội dung: ${chunk}`;
+                
+                // Tạo Vector
+                const result = await model.embedContent(contextChunk);
+                const embedding = result.embedding.values;
+
+                // Lưu vào Supabase (ĐÃ BẬT METADATA)
+                const { error: insertError } = await supabase
+                    .from('vn_buddhism_content')
+                    .insert({
+                        content: contextChunk,
+                        embedding: embedding,
+                        url: url,
+                        original_id: post.id,
+                        metadata: { title: title } // Quan trọng: Lưu tiêu đề để sau này dễ quản lý
+                    });
+                
+                if (insertError) {
+                    logs.push(`❌ Lỗi lưu chunk: ${insertError.message}`);
+                }
+            }
+            processedCount++;
+            await sleep(500); 
+        }
+
+        res.json({ 
+            message: `Hoàn tất! Đã thêm mới ${processedCount} bài viết vào bộ nhớ AI.`, 
+            logs: logs 
+        });
+
+    } catch (error) {
+        console.error("Lỗi Sync:", error);
+        res.status(500).json({ error: error.message, logs });
+    }
+});
+
 app.listen(PORT, () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
