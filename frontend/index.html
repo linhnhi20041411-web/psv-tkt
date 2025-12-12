@@ -40,7 +40,7 @@
         /* START: CSS ĐỂ GIẢI QUYẾT DỨT ĐIỂM VẤN ĐỀ POPUP */
         /* Quy tắc này có độ ưu tiên rất cao, đảm bảo mọi link bên trong
            bong bóng chat sẽ luôn có màu xanh và gạch chân. */
-        .message-bubble a {
+        .message-bubble a:not([style*="background-color"]) {
             color: #2563eb !important;
             text-decoration: underline !important;
             font-weight: 600 !important;
@@ -87,7 +87,7 @@
         </div>
     </div>
 
-    <script>
+	<script>
         // --- SỬA LỖI CHIỀU CAO TRÊN MOBILE ---
         const setAppHeight = () => {
             document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
@@ -96,81 +96,45 @@
         setAppHeight();
         // --- KẾT THÚC SỬA LỖI ---
 
-        // === THÔNG TIN CẤU HÌNH QUAN TRỌNG ===
-        const BACKEND_API_URL = "https://trolyniemkinh.onrender.com";
-        const DEFAULT_DOCUMENT_URL = "/dulieu.txt";
-        let documentContext = "";
-        // ===================================
-
+        // === THÔNG TIN CẤU HÌNH ===
+        const BACKEND_API_URL = "https://psv-tkt.onrender.com"; 
+        // BỎ: DEFAULT_DOCUMENT_URL và documentContext vì Server tự lo
+        
         const chatMessages = document.getElementById('chat-messages');
         const userInput = document.getElementById('user-input');
         const sendButton = document.getElementById('send-button');
 
-        // --- Bắt sự kiện click để mở link trong tab mới ---
         chatMessages.addEventListener('click', function(event) {
             const linkElement = event.target.closest('a');
             if (linkElement) {
                 event.preventDefault();
                 const url = linkElement.href;
-                if (url) {
-                    window.open(url, '_blank', 'noopener,noreferrer');
-                }
+                if (url) window.open(url, '_blank', 'noopener,noreferrer');
             }
         });
 
-        window.addEventListener('load', async () => {
-            //addMessage('Đang chuẩn bị...', 'bot', 'info');
-            try {
-                const response = await fetch(DEFAULT_DOCUMENT_URL);
-                if (!response.ok) {
-                    throw new Error(`Không thể tải tệp (status: ${response.status})`);
-                }
-                documentContext = await response.text();
-                addMessage('Đệ chào Sư huynh ! Sư huynh cứ đặt câu hỏi ạ?', 'bot');
-                userInput.disabled = false;
-                userInput.placeholder = "Nhập câu hỏi của bạn...";
-            } catch (error) {
-                console.error("Lỗi khi tải tài liệu mặc định:", error);
-                addMessage(`Lỗi khi tải tài liệu: ${error.message}`, 'bot', 'error');
-                userInput.placeholder = "Tải tài liệu thất bại!";
-            }
+        // 1. Khi tải trang: Chỉ cần chào, không cần tải dữ liệu
+        window.addEventListener('load', () => {
+            addMessage('Đệ chào Sư huynh ! Sư huynh cứ đặt câu hỏi ạ?', 'bot');
+            userInput.disabled = false;
+            userInput.placeholder = "Nhập câu hỏi của bạn...";
         });
 
-        /**
-         * Hàm xử lý link và văn bản.
-         * @param {string} text - Văn bản đầu vào.
-         * @returns {string} - Chuỗi HTML đã được xử lý.
-         */
         function linkifyAndSanitize(text) {
-            if (typeof text !== 'string') {
-                return '';
-            }
-
-            // 1. An toàn hóa văn bản
+            if (typeof text !== 'string') return '';
             const sanitizerDiv = document.createElement('div');
             sanitizerDiv.textContent = text;
             let sanitizedText = sanitizerDiv.innerHTML;
-
-            // 2. Xử lý In Đậm: **text** -> <span class="font-bold">text</span>
-            // Sử dụng class 'font-bold' của Tailwind
             sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
-
-            // 3. Xử lý In Nghiêng: _text_ -> <span class="italic">text</span>
-            // Sử dụng class 'italic' của Tailwind
             sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
-
-            // 4. Xử lý Link
             const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
             const linkifiedText = sanitizedText.replace(urlRegex, '<a href="$&" target="_blank" rel="noopener noreferrer">$&</a>');
-
-            // 5. Xử lý xuống dòng
             return linkifiedText.replace(/\n/g, '<br>');
         }
 
         function addMessage(message, sender, type = 'normal') {
             const messageWrapper = document.createElement('div');
             messageWrapper.classList.add('message', 'mb-4', 'flex', 'w-full');
-            
             const messageBubble = document.createElement('div');
             messageBubble.classList.add('message-bubble', 'rounded-xl', 'p-4', 'max-w-xl', 'shadow-md');
 
@@ -189,23 +153,31 @@
             }
 
             const contentP = document.createElement('p');
-            contentP.innerHTML = linkifyAndSanitize(message);
-            
+			// NẾU LÀ BOT: Cho phép hiển thị HTML (để hiện nút bấm)
+            if (sender === 'bot') {
+                // Chỉ chuyển đổi xuống dòng \n thành <br>, giữ nguyên các thẻ HTML khác
+                contentP.innerHTML = message.replace(/\n/g, '<br>'); 
+            } 
+            // NẾU LÀ USER: Lọc mã độc như cũ
+            else {
+                contentP.innerHTML = linkifyAndSanitize(message);
+            }
             messageBubble.appendChild(contentP);
             messageWrapper.appendChild(messageBubble);
             chatMessages.appendChild(messageWrapper);
             chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        async function callBackendAPI(question, context) {
+        // 2. Gọi API: Chỉ gửi question, KHÔNG gửi context
+        async function callBackendAPI(question) {
             const url = `${BACKEND_API_URL.replace(/\/$/, "")}/api/chat`;
 
             const response = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    question: question,
-                    context: context
+                    question: question
+                    // context: context <--- ĐÃ BỎ DÒNG NÀY
                 })
             });
 
@@ -215,7 +187,7 @@
                     const errorData = await response.json();
                     errorText = `Đệ xin lỗi: ${errorData.error || response.statusText}`;
                 } catch (e) {
-                    errorText = `Server trả về lỗi không phải JSON (status: ${response.status}). Vui lòng kiểm tra lại địa chỉ BACKEND_API_URL.`;
+                    errorText = `Lỗi kết nối Server.`;
                 }
                 throw new Error(errorText);
             }
@@ -234,8 +206,8 @@
             sendButton.innerHTML = '<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>';
 
             try {
-                const answer = await callBackendAPI(userQuestion, documentContext);
-                console.log("Dữ liệu gốc từ API:", answer);
+                // Gọi hàm mới không cần tham số thứ 2
+                const answer = await callBackendAPI(userQuestion);
                 addMessage(answer, 'bot');
             } catch (error) {
                 console.error("Lỗi chi tiết:", error);
@@ -253,8 +225,9 @@
                 handleSendMessage();
             }
         });
+        // Sửa logic check input: không cần check documentContext nữa
         userInput.addEventListener('input', () => { 
-            sendButton.disabled = userInput.value.trim().length === 0 || !documentContext; 
+            sendButton.disabled = userInput.value.trim().length === 0; 
         });
     </script>
 </body>
