@@ -134,7 +134,39 @@
             userInput.placeholder = "Nhập câu hỏi của bạn...";
         });
 
-        
+        function linkifyAndSanitize(text) {
+            if (typeof text !== 'string') return '';
+            
+            const sanitizerDiv = document.createElement('div');
+            sanitizerDiv.textContent = text;
+            let sanitizedText = sanitizerDiv.innerHTML;
+
+            sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
+            sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
+
+            // --- LOGIC LỌC TRÙNG THÔNG MINH ---
+            // Nó tìm: (Link A) ...nội dung... (Link A)
+            // \1 có nghĩa là: "Phải giống hệt cái Link A vừa tìm thấy ở trước"
+            // Nếu là Link B, nó sẽ không khớp và không bị gộp.
+            const duplicateRegex = /(https?:\/\/[^\s]+)([\s\S]*?)\1/g;
+            let loopSafety = 0; 
+            let previousText = "";
+            
+            while (sanitizedText !== previousText && loopSafety < 10) {
+                previousText = sanitizedText;
+                sanitizedText = sanitizedText.replace(duplicateRegex, "$2$1");
+                loopSafety++;
+            }
+
+            const urlRegex = /(https?:\/\/[^\s]+)/g;
+            
+            const linkifiedText = sanitizedText.replace(urlRegex, function(url) {
+                let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
+                return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
+            });
+
+            return linkifiedText.replace(/\n/g, '<br>');
+        }
 
         function addMessage(message, sender, type = 'normal') {
             const messageWrapper = document.createElement('div');
