@@ -1,4 +1,4 @@
-// server.js - Phiên bản Tích hợp Supabase RAG + Nút Xem Thêm (Link Source)
+// server.js - Phiên bản Hybrid Search RAG (Đã tối ưu cho Node.js)
 
 const express = require('express');
 const axios = require('axios');
@@ -13,79 +13,61 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// --- 1. CẤU HÌNH SUPABASE & API KEYS ---
+// --- 1. CẤU HÌNH ---
 const rawKeys = process.env.GEMINI_API_KEYS || "";
 const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.length > 0);
-
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 
-if (!supabaseUrl || !supabaseKey) {
-    console.error("❌ LỖI: Chưa cấu hình SUPABASE_URL hoặc SUPABASE_KEY");
-}
-// Tạo client Supabase
+if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL hoặc SUPABASE_KEY");
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-if (apiKeys.length > 0) {
-    console.log(`✅ Đã tìm thấy [${apiKeys.length}] API Keys.`);
-} else {
-    console.error("❌ CẢNH BÁO: Chưa cấu hình API Key!");
-}
-
-app.get('/api/health', (req, res) => {
-    res.status(200).json({ status: "OK", server: "Ready" });
-});
-
-const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// --- 2. HÀM HỖ TRỢ: LẤY KEY NGẪU NHIÊN ---
 function getRandomKey() {
     return apiKeys[Math.floor(Math.random() * apiKeys.length)];
 }
 
-// --- 3. HÀM MỚI: TÌM KIẾM CONTEXT TỪ SUPABASE (ĐÃ SỬA ĐỂ LẤY URL) ---
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- 2. HÀM TÌM KIẾM MỚI (HYBRID SEARCH) ---
 async function searchSupabaseContext(query) {
     try {
-        if (!supabaseUrl || !supabaseKey) return null; // Sửa thành null để dễ check
+        if (!supabaseUrl || !supabaseKey) return null;
         
-        // Dùng SDK để tạo Embedding cho câu hỏi
+        // Tạo Embedding cho câu hỏi
         const genAI = new GoogleGenerativeAI(getRandomKey());
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         
         const result = await model.embedContent(query);
         const queryVector = result.embedding.values;
 
-        // Gọi hàm RPC trong Supabase
-        const { data, error } = await supabase.rpc('match_documents', {
-            query_embedding: queryVector,
-            match_threshold: 0.5, // Chỉ lấy độ chính xác > 50%
-            match_count: 5        // Lấy 5 đoạn văn bản tốt nhất
+        // Gọi hàm hybrid_search (Thay vì match_documents cũ)
+        // Lưu ý: Không dùng threshold để tránh lọc mất kết quả tiềm năng
+        const { data, error } = await supabase.rpc('hybrid_search', {
+            query_text: query,              // Để tìm từ khóa
+            query_embedding: queryVector,   // Để tìm ngữ nghĩa
+            match_count: 10                 // Lấy 10 đoạn tốt nhất để Gemini lọc
         });
 
-        if (error) throw error;
+        if (error) {
+            console.error("Lỗi Supabase RPC:", error);
+            throw error;
+        }
 
         if (!data || data.length === 0) return null;
 
-        // --- CẬP NHẬT MỚI: Lấy URL của kết quả đầu tiên ---
-        const topUrl = data[0].url; 
-
-        // Ghép các đoạn văn tìm được thành 1 chuỗi context
-        const contextText = data.map(doc => doc.content).join("\n\n---\n\n");
-
-        // Trả về Object chứa cả Text và URL
-        return { text: contextText, url: topUrl };
+        // Trả về danh sách đầy đủ để xử lý ở bước sau
+        return data; 
 
     } catch (error) {
-        console.error("Lỗi tìm kiếm Supabase:", error);
+        console.error("Lỗi tìm kiếm:", error);
         return null; 
     }
 }
 
-// --- 4. HÀM GỌI API GEMINI ---
+// --- 3. GỌI GEMINI ---
 async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     if (keyIndex >= apiKeys.length) {
         if (retryCount < 1) {
-            console.log("🔁 Hết vòng Key, chờ 2s thử lại...");
             await sleep(2000);
             return callGeminiWithRetry(payload, 0, retryCount + 1);
         }
@@ -93,8 +75,8 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 
     const currentKey = apiKeys[keyIndex];
-    // Dùng Flash 2.0 (hoặc 1.5-flash tùy bạn chọn)
-    const model = "gemini-2.5-flash"; 
+    // Dùng Flash 2.0 cho nhanh và thông minh hơn
+    const model = "gemini-2.0-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -105,9 +87,9 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
         return response;
     } catch (error) {
         const status = error.response ? error.response.status : 0;
-        if (status === 429 || status === 400 || status === 403 || status >= 500) {
+        if (status === 429 || status >= 500) {
             console.warn(`⚠️ Key ${keyIndex} lỗi (Mã: ${status}). Đổi Key...`);
-            if (status === 429) await sleep(1000); 
+            await sleep(1000); 
             return callGeminiWithRetry(payload, keyIndex + 1, retryCount);
         }
         throw error;
@@ -117,113 +99,79 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 app.post('/api/chat', async (req, res) => {
     try {
         const { question } = req.body; 
-        
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        console.log(`🔍 Đang tìm dữ liệu cho: "${question}"`);
+        console.log(`🔍 User hỏi: "${question}"`);
         
-        // --- CẬP NHẬT MỚI: Xử lý kết quả trả về từ Supabase ---
-        const searchResult = await searchSupabaseContext(question);
+        // 1. Tìm kiếm dữ liệu
+        const documents = await searchSupabaseContext(question);
 
-        if (!searchResult) {
-            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site ." });
+        if (!documents) {
+            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" });
         }
 
-        // Tách Text và URL ra
-        const context = searchResult.text;
-        const sourceUrl = searchResult.url; 
+        // 2. Xây dựng Context String thông minh (Kèm Link)
+        // Chúng ta sẽ ghép Link ngay vào đoạn văn để Gemini biết trích dẫn
+        let contextString = "";
+        let primaryUrl = documents[0].url; // Lấy URL của bài khớp nhất làm nút "Xem thêm" chính
 
-        // --- CÁC PHẦN SAU GIỮ NGUYÊN ---
-        const safetySettings = [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-        ];
+        documents.forEach((doc, index) => {
+            contextString += `
+            --- Nguồn tham khảo #${index + 1} ---
+            Link gốc: ${doc.url || 'Không có link'}
+            Nội dung: ${doc.content}
+            `;
+        });
 
-        const promptGoc = `Bạn là một công cụ trích xuất thông tin chính xác tuyệt đối. Nhiệm vụ của bạn là trích xuất câu trả lời cho câu hỏi của người dùng CHỈ từ trong VĂN BẢN NGUỒN được cung cấp.
-
-        **QUY TẮC BẮT BUỘC PHẢI TUÂN THEO TUYỆT ĐỐI:**
-        1.  **NGUỒN DỮ LIỆU DUY NHẤT:** Chỉ được phép sử dụng thông tin có trong phần "VĂN BẢN NGUỒN". TUYỆT ĐỐI KHÔNG sử dụng kiến thức bên ngoài.
-        2.  **CHIA NHỎ:** Không viết thành đoạn văn. Hãy tách từng ý quan trọng thành các gạch đầu dòng riêng biệt.          
-        3.  **XỬ LÝ KHI KHÔNG TÌM THẤY:** Nếu thông tin không có trong văn bản nguồn, BẮT BUỘC trả lời chính xác câu: "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site ."
-        4.  **XƯNG HÔ:** Bạn tự xưng là "đệ" và gọi người hỏi là "Sư huynh".
-        5.  **CHUYỂN ĐỔI NGÔI KỂ:** Chuyển "con/trò" thành "Sư huynh".
-        6.  **XỬ LÝ LINK:** Trả về URL thuần túy, KHÔNG dùng Markdown link.
-        7.  **PHONG CÁCH:** Trả lời NGẮN GỌN, SÚC TÍCH, đi thẳng vào vấn đề chính.
+        // 3. Prompt Engineering (Kỹ thuật ép trích dẫn)
+        const systemPrompt = `
+        Bạn là Phụng Sự Viên Ảo của trang "Tìm Khai Thị" (Pháp Môn Tâm Linh).
         
-        --- VĂN BẢN NGUỒN BẮT ĐẦU ---
-        ${context}
-        --- VĂN BẢN NGUỒN KẾT THÚC ---
+        NHIỆM VỤ: Trả lời câu hỏi của người dùng dựa trên "THÔNG TIN THAM KHẢO" bên dưới.
         
+        QUY TẮC BẮT BUỘC:
+        1. **Trung thực:** Chỉ dùng thông tin trong context. Nếu không có thông tin, hãy hướng dẫn người dùng vào trang mục lục (https://mucluc.pmtl.site).
+        2. **Trích dẫn Link (QUAN TRỌNG):** - Sau mỗi ý hoặc đoạn thông tin lấy từ nguồn nào, bạn PHẢI để link nguồn đó ngay bên cạnh.
+           - Ví dụ: "Niệm kinh cần tịnh tâm [Xem chi tiết](URL_NGUỒN)".
+        3. **Văn phong:** Xưng "đệ", gọi "Sư huynh/Sư tỷ", khiêm cung, nhẹ nhàng.
+        4. **Định dạng:** Dùng Markdown, gạch đầu dòng cho dễ đọc.
+
+        --- THÔNG TIN THAM KHẢO ---
+        ${contextString}
+        --- HẾT THÔNG TIN ---
+
         Câu hỏi: ${question}
-        Câu trả lời:`;
+        Trả lời:
+        `;
 
-        let response = await callGeminiWithRetry({
-            contents: [{ parts: [{ text: promptGoc }] }],
-            safetySettings: safetySettings,
-            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
+        const response = await callGeminiWithRetry({
+            contents: [{ parts: [{ text: systemPrompt }] }],
+            generationConfig: { temperature: 0.3 }
         }, 0);
 
-        let aiResponse = "";
-        let finishReason = "";
+        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-        if (response.data && response.data.candidates && response.data.candidates.length > 0) {
-            const candidate = response.data.candidates[0];
-            finishReason = candidate.finishReason;
-            if (candidate.content?.parts?.[0]?.text) {
-                aiResponse = candidate.content.parts[0].text;
-            }
+        // Fallback nếu Gemini không trả lời
+        if (!aiResponse) {
+             aiResponse = "Hiện tại đệ chưa kết nối được với kho dữ liệu. Sư huynh thử lại sau nhé.";
         }
 
-        if (finishReason === "RECITATION" || !aiResponse) {
-            console.log("⚠️ Kích hoạt Chiến thuật Diễn Giải...");
-            const promptDienGiai = `Bạn là trợ lý hỗ trợ tu tập.
-            NV: Trả lời câu hỏi: "${question}" dựa trên VĂN BẢN NGUỒN.
-            GIẢI PHÁP: Đọc hiểu và diễn đạt lại ý chính dưới dạng gạch đầu dòng. Không làm sai lệch ý nghĩa.
-            XƯNG HÔ: Bắt đầu bằng: "Do hạn chế về bản quyền trích dẫn, đệ xin tóm lược các ý chính như sau:".
-
-            --- VĂN BẢN NGUỒN ---
-            ${context}
-            --- HẾT ---`;
-
-            response = await callGeminiWithRetry({
-                contents: [{ parts: [{ text: promptDienGiai }] }],
-                safetySettings: safetySettings,
-                generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
-            }, 0);
-
-            if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-                aiResponse = response.data.candidates[0].content.parts[0].text;
-            } else {
-                aiResponse = "Nội dung này Google chặn tuyệt đối (Recitation).";
-            }
-        }
-
-        // --- CẬP NHẬT MỚI: GHÉP NÚT XEM THÊM ---
-        let finalAnswer = "";
-        if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
-             finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
-        } else {
-            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời :**\n\n" + aiResponse;
-
-            // Kiểm tra và thêm nút nếu có Link
-            if (sourceUrl && sourceUrl.startsWith('http')) {
-                // Style nút bấm màu cam đậm, bo tròn
-                finalAnswer += `\n\n<br><a href="${sourceUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Thêm Chi Tiết</a>`;
-            } else {
-                finalAnswer += "\n\n_Dữ liệu trích xuất từ kho tàng thư._";
-            }
+        // 4. Xử lý kết quả trả về
+        let finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
+        
+        // Thêm nút xem thêm (dẫn đến bài viết khớp nhất)
+        if (primaryUrl && primaryUrl.startsWith('http')) {
+             finalAnswer += `\n\n<br><a href="${primaryUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:10px 20px; border-radius:20px; text-decoration:none; font-weight:bold; margin-top:10px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Đọc Bài Viết Gốc Tốt Nhất</a>`;
         }
 
         res.json({ answer: finalAnswer });
 
     } catch (error) {
-        console.error("Lỗi:", error);
+        console.error("Lỗi Server:", error);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
 app.listen(PORT, () => {
-    console.log(`Server đang chạy tại http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
 });
