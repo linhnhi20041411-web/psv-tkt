@@ -179,7 +179,7 @@ app.post('/api/chat', async (req, res) => {
         1. Chỉ dùng thông tin trong context.
         2. QUAN TRỌNG: Sau mỗi ý trả lời, BẮT BUỘC dán ngay đường Link gốc (URL) vào ngay sau dấu chấm câu.
         3. Chỉ dán URL trần, KHÔNG viết thêm chữ như "(Xem: ...)" hay markdown. Ví dụ đúng: "...cần tịnh tâm. https://..."
-        4. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh/tỷ".
+        4. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh".
         
         Context:
         ${contextString}
