@@ -134,38 +134,41 @@
             userInput.placeholder = "Nhập câu hỏi của bạn...";
         });
 
-        // --- HÀM XỬ LÝ TEXT: GỘP LINK & TẠO NÚT (KHÔNG TREO MÁY) ---
+        // --- HÀM XỬ LÝ TEXT: GỘP LINK, TẠO NÚT & FIX LỖI 27.html ---
         function linkifyAndSanitize(text) {
             if (typeof text !== 'string') return '';
             
-            // 1. Lọc mã độc (XSS) & lấy HTML
+            // 1. Lọc mã độc (XSS)
             const sanitizerDiv = document.createElement('div');
             sanitizerDiv.textContent = text;
             let sanitizedText = sanitizerDiv.innerHTML;
 
-            // 2. Format in đậm/nghiêng
+            // 2. Format in đậm (**text**)
             sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
-            sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
+            
+            // 3. Format in nghiêng (_text_) - ĐÃ SỬA LỖI
+            // Chỉ in nghiêng nếu dấu _ có khoảng trắng phía trước (hoặc đầu dòng)
+            // Điều này giúp bảo vệ dấu _ trong đường link (như ..._27.html) không bị hiểu nhầm
+            sanitizedText = sanitizedText.replace(/(^|\s)_(.*?)_(\s|$)/g, '$1<span class="italic">$2</span>$3');
 
-            // 3. XỬ LÝ LINK THÔNG MINH
-            // SỬA QUAN TRỌNG: Bỏ dấu ngoặc đơn () bao quanh regex để tham số truyền vào đúng chuẩn
+            // 4. XỬ LÝ LINK THÔNG MINH (Không treo máy, không cắt link)
+            // Bỏ ngoặc đơn () trong regex để tránh lỗi TypeError
             const urlRegex = /https?:\/\/[^\s<"]+/g;
             
             const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
-                // Lúc này fullString chắc chắn là chuỗi, hàm indexOf sẽ hoạt động
-                
                 // Kiểm tra xem Link này có xuất hiện lại ở phía sau không?
                 if (fullString.indexOf(url, offset + url.length) !== -1) {
-                    return ""; // Nếu còn lặp lại phía sau -> XÓA link hiện tại
+                    return ""; // Nếu còn lặp lại phía sau -> XÓA link này đi (ẩn đi)
                 }
 
                 // Nếu là link cuối cùng -> TẠO NÚT
                 let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
                 
+                // Trả về nút Nâu Đỏ - Chữ Vàng
                 return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
             });
 
-            // 4. Xuống dòng
+            // 5. Xuống dòng
             return linkifiedText.replace(/\n/g, '<br>');
         }
 
