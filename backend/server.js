@@ -23,6 +23,10 @@ if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+app.get('/api/health', (req, res) => {
+    res.status(200).json({ status: "OK", server: "Ready" });
+});
+
 // Hàm tiện ích: Lấy key ngẫu nhiên (chỉ dùng cho lần gọi đầu tiên)
 function getRandomStartIndex() {
     return Math.floor(Math.random() * apiKeys.length);
