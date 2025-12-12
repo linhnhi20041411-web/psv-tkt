@@ -11,6 +11,18 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
+// Cho phép truy cập file dulieu.txt khi gọi vào đường dẫn /dulieu.txt
+app.get('/dulieu.txt', (req, res) => {
+    const filePath = path.join(__dirname, 'dulieu.txt');
+    res.sendFile(filePath, (err) => {
+        if (err) {
+            console.error("Lỗi không tìm thấy file dulieu.txt:", err);
+            res.status(404).send("Không tìm thấy file dữ liệu.");
+        }
+    });
+});
+// ---------------------
+
 // --- 1. XỬ LÝ DANH SÁCH KEY ---
 const rawKeys = process.env.GEMINI_API_KEYS || "";
 const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.length > 0);
