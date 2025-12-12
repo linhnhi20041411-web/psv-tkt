@@ -60,22 +60,24 @@
         }
 		/* Style cho nút link thu gọn */
 		.tiny-btn {
-		    display: inline-flex;
-		    align-items: center;
-		    background-color: #b45309; /* Màu cam đậm (amber-700) */
-		    color: white !important; /* Chữ trắng bắt buộc */
-		    padding: 2px 10px;
-		    border-radius: 15px; /* Bo tròn hình viên thuốc */
-		    font-size: 11px; /* Chữ nhỏ gọn */
+		    display: inline-block; /* Hoặc block để chiếm dòng riêng nếu muốn */
+		    margin-top: 8px;       /* Cách đoạn văn bên trên ra 1 chút */
+		    margin-bottom: 4px;    /* Cách đoạn dưới */
+		    background-color: #7f1d1d; /* Nâu đỏ đậm (Rất trang nghiêm) */
+		    color: #fcd34d !important; /* Chữ màu Vàng (Amber-300) - !important để không bị đè màu xanh */
+		    padding: 6px 16px;     /* Nút to hơn một chút cho dễ bấm */
+		    border-radius: 20px;   /* Bo tròn */
+		    font-size: 13px;       /* Chữ to hơn xíu cho dễ đọc */
 		    font-weight: bold;
-		    text-decoration: none !important; /* Bỏ gạch chân */
-		    margin: 0 4px; /* Cách chữ ra một chút */
-		    box-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+		    text-decoration: none !important;
+		    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
 		    transition: all 0.2s;
-		    vertical-align: middle;
+		    border: 1px solid #991b1b; /* Viền nhẹ cho nổi bật */
 		}
+		
 		.tiny-btn:hover {
-		    background-color: #92400e; /* Đậm hơn khi hover */
+		    background-color: #991b1b; /* Sáng hơn chút khi di chuột */
+		    color: #ffffff !important; /* Hover chuyển sang trắng */
 		    transform: translateY(-1px);
 		}
     </style>
@@ -154,23 +156,23 @@
 		    // 2. Format in nghiêng (_text_)
 		    sanitizedText = sanitizedText.replace(/_(.*?)_/g, '<span class="italic">$1</span>');
 		
-		    // 3. XỬ LÝ LINK: Biến URL trần thành nút "Đọc bài gốc"
-		    // Regex này bắt các đường link bắt đầu bằng http/https
-		    const urlRegex = /(https?:\/\/[^\s<>"')]+)/g;
+		    // 3. XỬ LÝ LINK (ĐÃ FIX LỖI CẮT LINK _27.html)
+		    // Regex mới này bắt tất cả ký tự không phải khoảng trắng
+		    const urlRegex = /(https?:\/\/[^\s]+)/g;
 		    
 		    const linkifiedText = sanitizedText.replace(urlRegex, function(url) {
-		        // Loại bỏ dấu chấm hoặc phẩy dính ở cuối link (do Gemini đôi khi viết liền)
-		        let cleanUrl = url;
-		        const lastChar = url.slice(-1);
-		        let suffix = "";
+		        // Loại bỏ các dấu câu thường gặp ở cuối câu nếu bị dính vào link
+		        // Ví dụ: link. -> link
+		        let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
 		        
-		        if (['.', ',', ')', ';'].includes(lastChar)) {
-		            cleanUrl = url.slice(0, -1);
-		            suffix = lastChar;
-		        }
-		
-		        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">📖 Đọc bài gốc</a>${suffix}`;
+		        // Trả về nút bấm nằm ở dòng mới (<br> ở trước)
+		        // class="tiny-btn" đã được chỉnh màu Nâu Đỏ - Chữ Vàng
+		        return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
 		    });
+		
+		    // 4. Xuống dòng văn bản thường
+		    return linkifiedText.replace(/\n/g, '<br>');
+		}
 		
 		    // 4. Xuống dòng
 		    return linkifiedText.replace(/\n/g, '<br>');
