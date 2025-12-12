@@ -159,7 +159,8 @@ app.post('/api/chat', async (req, res) => {
         }
 
         let contextString = "";
-        let primaryUrl = documents[0].url;
+        // Biến này vẫn giữ để phòng hờ, nhưng không dùng tạo nút to nữa
+        let primaryUrl = documents[0].url; 
 
         documents.forEach((doc, index) => {
             contextString += `
@@ -169,15 +170,16 @@ app.post('/api/chat', async (req, res) => {
             `;
         });
 
+        // --- 1. SỬA PROMPT ĐỂ GEMINI TRẢ VỀ LINK GỌN ---
         const systemPrompt = `
         Bạn là Phụng Sự Viên Ảo của trang "Tìm Khai Thị".
         Nhiệm vụ: Trả lời câu hỏi dựa trên context bên dưới.
         
         Yêu cầu BẮT BUỘC:
         1. Chỉ dùng thông tin trong context.
-        2. Sau mỗi ý trả lời, BẮT BUỘC ghi chú link nguồn bên cạnh. Ví dụ: "...cần tịnh tâm (Xem: URL)".
-        3. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh/tỷ".
-        4. Nếu không tìm thấy câu trả lời trong context, hãy nói khéo là chưa tìm thấy và mời xem mục lục.
+        2. QUAN TRỌNG: Sau mỗi ý trả lời, BẮT BUỘC dán ngay đường Link gốc (URL) vào ngay sau dấu chấm câu.
+        3. Chỉ dán URL trần, KHÔNG viết thêm chữ như "(Xem: ...)" hay markdown. Ví dụ đúng: "...cần tịnh tâm. https://..."
+        4. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh/tỷ".
         
         Context:
         ${contextString}
@@ -185,7 +187,7 @@ app.post('/api/chat', async (req, res) => {
         Câu hỏi: ${question}
         `;
 
-        // Bắt đầu chat từ một key ngẫu nhiên
+        // Gọi Embedding Retry (như code tối ưu trước đó)
         const startIndex = getRandomStartIndex();
         const response = await callGeminiChat({
             contents: [{ parts: [{ text: systemPrompt }] }]
@@ -195,10 +197,6 @@ app.post('/api/chat', async (req, res) => {
         
         let finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
         
-        if (primaryUrl && primaryUrl.startsWith('http')) {
-             finalAnswer += `\n\n<br><a href="${primaryUrl}" target="_blank" style="display:inline-block; background-color:#b45309; color:white; padding:8px 16px; border-radius:20px; text-decoration:none; font-weight:bold; font-size: 14px; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">👉 Xem Bài Gốc Khớp Nhất</a>`;
-        }
-
         res.json({ answer: finalAnswer });
 
     } catch (error) {
