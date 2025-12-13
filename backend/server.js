@@ -214,7 +214,7 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
         // Tạo đường dẫn RSS: Lấy 50 bài mới nhất
         // Nếu blogUrl có dấu / ở cuối thì bỏ đi
         const cleanBlogUrl = blogUrl.replace(/\/$/, "");
-        const rssUrl = `${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=50`;
+        const rssUrl = `${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`;
         
         logs.push(`📡 Đang kết nối tới RSS: ${rssUrl}`);
 
