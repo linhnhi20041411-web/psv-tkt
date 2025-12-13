@@ -12,7 +12,7 @@
         <h1 class="text-2xl font-bold text-gray-800 mb-2 text-center">⚙️ Quản Lý Dữ Liệu AI</h1>
         
         <div class="flex border-b border-gray-200 mb-6">
-            <button onclick="switchTab('auto')" id="tabAuto" class="flex-1 py-2 px-4 text-center text-amber-600 border-b-2 border-amber-600 font-bold focus:outline-none">Đồng Bộ Tự Động</button>
+            <button onclick="switchTab('auto')" id="tabAuto" class="flex-1 py-2 px-4 text-center text-amber-600 border-b-2 border-amber-600 font-bold focus:outline-none">Đồng Bộ Từ Blogger</button>
             <button onclick="switchTab('manual')" id="tabManual" class="flex-1 py-2 px-4 text-center text-gray-500 hover:text-amber-600 font-medium focus:outline-none">Thêm Thủ Công</button>
         </div>
 
@@ -22,14 +22,20 @@
         </div>
 
         <div id="contentAuto" class="space-y-4">
-            <p class="text-gray-500 text-sm">Quét và đồng bộ bài viết mới nhất từ nguồn dữ liệu (Blogger/Database).</p>
+            <p class="text-gray-500 text-sm">Nhập link trang chủ Blog để tự động quét 50 bài mới nhất.</p>
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Địa chỉ Blog (Blogger)</label>
+                <input type="text" id="blogUrl" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-amber-500" placeholder="Ví dụ: https://timkhaithi.pmtl.site">
+            </div>
+
             <button onclick="startSync()" id="btnSync" class="w-full bg-amber-600 hover:bg-amber-700 text-white font-bold py-3 rounded-lg transition duration-300 flex justify-center items-center">
-                🔄 Cập Nhật Bài Mới Ngay
+                🔄 Quét RSS & Cập Nhật Ngay
             </button>
         </div>
 
         <div id="contentManual" class="hidden space-y-4">
-            <p class="text-gray-500 text-sm">Thêm hoặc cập nhật lại một bài viết cụ thể vào trí nhớ của AI.</p>
+            <p class="text-gray-500 text-sm">Thêm một bài viết cụ thể (nếu RSS chưa kịp cập nhật).</p>
             
             <div>
                 <label class="block text-sm font-medium text-gray-700">URL Bài Viết</label>
@@ -42,8 +48,8 @@
             </div>
 
             <div>
-                <label class="block text-sm font-medium text-gray-700">Nội Dung Chi Tiết</label>
-                <textarea id="manualContent" rows="6" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-amber-500" placeholder="Paste toàn bộ nội dung bài viết vào đây..."></textarea>
+                <label class="block text-sm font-medium text-gray-700">Nội Dung</label>
+                <textarea id="manualContent" rows="6" class="w-full px-3 py-2 border rounded-lg focus:ring-1 focus:ring-amber-500" placeholder="Nội dung bài viết..."></textarea>
             </div>
 
             <button onclick="manualAdd()" id="btnManual" class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg transition duration-300 flex justify-center items-center">
@@ -81,21 +87,23 @@
             logBox.scrollTop = logBox.scrollHeight;
         }
 
-        // --- HÀM 1: ĐỒNG BỘ TỰ ĐỘNG ---
         async function startSync() {
             const pass = document.getElementById('password').value;
+            const blogUrl = document.getElementById('blogUrl').value;
+
             if (!pass) return alert("Vui lòng nhập mật khẩu!");
+            if (!blogUrl) return alert("Vui lòng nhập địa chỉ Blog!");
 
             const btn = document.getElementById('btnSync');
             btn.disabled = true;
-            btn.innerHTML = `⏳ Đang xử lý...`;
-            document.getElementById('logs').innerHTML = "> Bắt đầu đồng bộ tự động...\n";
+            btn.innerHTML = `⏳ Đang quét RSS...`;
+            document.getElementById('logs').innerHTML = `> Kết nối tới ${blogUrl}...\n`;
 
             try {
                 const response = await fetch(`${API_URL}/api/admin/sync-blogger`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ password: pass })
+                    body: JSON.stringify({ password: pass, blogUrl: blogUrl })
                 });
                 const data = await response.json();
                 
@@ -106,11 +114,10 @@
                 log(`❌ Lỗi mạng: ${error.message}`);
             } finally {
                 btn.disabled = false;
-                btn.innerHTML = "🔄 Cập Nhật Bài Mới Ngay";
+                btn.innerHTML = "🔄 Quét RSS & Cập Nhật Ngay";
             }
         }
 
-        // --- HÀM 2: THÊM THỦ CÔNG (ĐÃ SỬA LỖI PASS) ---
         async function manualAdd() {
             const pass = document.getElementById('password').value;
             const url = document.getElementById('manualUrl').value;
@@ -122,14 +129,13 @@
 
             const btn = document.getElementById('btnManual');
             btn.disabled = true;
-            btn.innerHTML = `⏳ Đang vector hóa...`;
+            btn.innerHTML = `⏳ Đang xử lý...`;
             document.getElementById('logs').innerHTML = `> Đang xử lý bài: ${title}...\n`;
 
             try {
                 const response = await fetch(`${API_URL}/api/admin/manual-add`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    // SỬA Ở ĐÂY: password: pass (lấy giá trị từ biến pass)
                     body: JSON.stringify({ password: pass, url, title, content })
                 });
                 const data = await response.json();
