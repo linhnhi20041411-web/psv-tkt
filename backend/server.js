@@ -354,7 +354,7 @@ app.post('/api/admin/check-latest', async (req, res) => {
             .from('vn_buddhism_content')
             .select('id, url, metadata, created_at')
             .order('id', { ascending: false })
-            .limit(20);
+            .limit(100);
 
         if (error) throw error;
 
