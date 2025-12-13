@@ -202,24 +202,32 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// --- 7. API SYNC BLOGGER TRỰC TIẾP TỪ RSS (ĐÃ CẬP NHẬT) ---
+// --- 7. API SYNC BLOGGER (CHẾ ĐỘ STREAMING LOG REAL-TIME) ---
 app.post('/api/admin/sync-blogger', async (req, res) => {
-    const { password, blogUrl } = req.body; // Nhận thêm blogUrl
-    const logs = [];
+    const { password, blogUrl } = req.body;
 
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu Admin!" });
-    if (!blogUrl) return res.status(400).json({ error: "Vui lòng nhập địa chỉ Blog!" });
+    // Thiết lập Header để báo cho trình duyệt biết đây là dữ liệu dạng dòng chảy (Stream)
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    if (password !== ADMIN_PASSWORD) {
+        res.write("❌ Lỗi: Sai mật khẩu Admin!\n");
+        return res.end();
+    }
+    if (!blogUrl) {
+        res.write("❌ Lỗi: Thiếu địa chỉ Blog!\n");
+        return res.end();
+    }
 
     try {
-        // Tạo đường dẫn RSS: Lấy 50 bài mới nhất
-        // Nếu blogUrl có dấu / ở cuối thì bỏ đi
         const cleanBlogUrl = blogUrl.replace(/\/$/, "");
         const rssUrl = `${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`;
         
-        logs.push(`📡 Đang kết nối tới RSS: ${rssUrl}`);
+        // Gửi log đầu tiên về ngay lập tức
+        res.write(`📡 Đang kết nối tới RSS: ${rssUrl}\n`);
 
         const feed = await parser.parseURL(rssUrl);
-        logs.push(`✅ Tìm thấy ${feed.items.length} bài viết mới nhất trên Blog.`);
+        res.write(`✅ Tìm thấy ${feed.items.length} bài viết mới nhất.\n\n`);
 
         let processedCount = 0;
 
@@ -228,23 +236,24 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
             const url = post.link || "";
             const rawContent = post.content || post['content:encoded'] || post.contentSnippet || "";
 
-            // 1. Kiểm tra bài này đã có trong Database chưa (Dựa vào URL)
+            // Kiểm tra trùng
             const { count } = await supabase
                 .from('vn_buddhism_content')
                 .select('*', { count: 'exact', head: true })
                 .eq('url', url);
 
             if (count > 0) {
-                logs.push(`⚠️ Bỏ qua: "${title.substring(0, 20)}..." (Đã có).`);
+                // Bài đã có -> Bỏ qua và không log để đỡ rối mắt
                 continue;
             }
 
             if (rawContent.length < 50) continue;
 
-            // 2. Xử lý bài mới
             const cleanContent = cleanText(rawContent);
             const chunks = chunkText(cleanContent);
-            logs.push(`⚙️ Đang xử lý: "${title.substring(0, 30)}..." (${chunks.length} đoạn)`);
+            
+            // Gửi log đang xử lý bài này về Client ngay
+            res.write(`⚙️ Đang nạp: "${title.substring(0, 40)}..."\n`);
 
             for (const chunk of chunks) {
                 const contextChunk = `Tiêu đề: ${title}\nNội dung: ${chunk}`;
@@ -258,24 +267,34 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
                             content: contextChunk,
                             embedding: embedding,
                             url: url,
-                            original_id: 0, // 0 vì lấy từ RSS, không có ID số
+                            original_id: 0, 
                             metadata: { title: title, type: 'rss_auto' }
                         });
                     
-                    if (insertError) logs.push(`❌ Lỗi lưu DB: ${insertError.message}`);
+                    if (insertError) {
+                        res.write(`   ❌ Lỗi lưu DB: ${insertError.message}\n`);
+                    }
                 } catch (embError) {
-                    logs.push(`❌ Lỗi Vector: ${embError.message}`);
+                    res.write(`   ❌ Lỗi Vector: ${embError.message}\n`);
                 }
             }
             processedCount++;
-            await sleep(500); // Nghỉ nhẹ
+            // Nghỉ nhẹ để tránh spam server
+            await sleep(300);
         }
 
-        res.json({ message: `Hoàn tất! Đã thêm mới ${processedCount} bài.`, logs: logs });
+        if (processedCount === 0) {
+            res.write(`\n⚠️ Không có bài mới nào cần cập nhật (Tất cả đã tồn tại).\n`);
+        } else {
+            res.write(`\n🎉 HOÀN TẤT! Đã thêm mới thành công ${processedCount} bài viết.\n`);
+        }
+        
+        res.end(); // Kết thúc kết nối
 
     } catch (error) {
         console.error("Lỗi Sync RSS:", error);
-        res.json({ message: "Lỗi Sync", error: error.message, logs });
+        res.write(`❌ Lỗi hệ thống: ${error.message}\n`);
+        res.end();
     }
 });
 
