@@ -342,6 +342,42 @@ app.post('/api/admin/manual-add', async (req, res) => {
     }
 });
 
+// --- API MỚI: KIỂM TRA 20 BÀI MỚI NHẤT TRONG DB ---
+app.post('/api/admin/check-latest', async (req, res) => {
+    const { password } = req.body;
+
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu Admin!" });
+
+    try {
+        // Lấy 20 dòng mới nhất, chỉ lấy các cột cần thiết để hiển thị
+        const { data, error } = await supabase
+            .from('vn_buddhism_content')
+            .select('id, url, metadata, created_at')
+            .order('id', { ascending: false })
+            .limit(20);
+
+        if (error) throw error;
+
+        // Lọc trùng lặp URL để hiển thị danh sách bài viết duy nhất (vì 1 bài có nhiều đoạn chunk)
+        // Dùng Map để giữ lại bài mới nhất của mỗi URL
+        const uniquePosts = [];
+        const seenUrls = new Set();
+
+        for (const item of data) {
+            if (!seenUrls.has(item.url)) {
+                seenUrls.add(item.url);
+                uniquePosts.push(item);
+            }
+        }
+
+        res.json({ success: true, data: uniquePosts });
+
+    } catch (error) {
+        console.error("Lỗi Check DB:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
