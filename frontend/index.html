@@ -134,7 +134,7 @@
             userInput.placeholder = "Nhập câu hỏi của Sư huynh tại đây ạ...";
         });
 
-        // --- HÀM XỬ LÝ TEXT: GỘP LINK, TẠO NÚT & FIX LỖI 27.html ---
+        // --- HÀM XỬ LÝ TEXT V4: GỘP LINK, TẠO NÚT & HÀN GẮN LINK BỊ GÃY ---
         function linkifyAndSanitize(text) {
             if (typeof text !== 'string') return '';
             
@@ -143,22 +143,26 @@
             sanitizerDiv.textContent = text;
             let sanitizedText = sanitizerDiv.innerHTML;
 
-            // 2. Format in đậm (**text**)
+            // 2. [MỚI] HÀN GẮN LINK BỊ GÃY (QUAN TRỌNG)
+            // Nguyên nhân: AI hay xuống dòng sau dấu gạch ngang (-). Ví dụ: "hien- \n nay"
+            // Giải pháp: Tìm (chữ-) + (khoảng trắng/xuống dòng) + (chữ) -> Gộp lại thành (chữ-chữ)
+            sanitizedText = sanitizedText.replace(/([a-zA-Z0-9]-)[\s\n]+([a-zA-Z0-9])/g, "$1$2");
+
+            // 3. Format in đậm (**text**)
             sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
             
-            // 3. Format in nghiêng (_text_) - ĐÃ SỬA LỖI
-            // Chỉ in nghiêng nếu dấu _ có khoảng trắng phía trước (hoặc đầu dòng)
-            // Điều này giúp bảo vệ dấu _ trong đường link (như ..._27.html) không bị hiểu nhầm
+            // 4. Format in nghiêng (_text_)
+            // Chỉ in nghiêng nếu dấu _ có khoảng trắng phía trước, tránh ăn vào link chứa _
             sanitizedText = sanitizedText.replace(/(^|\s)_(.*?)_(\s|$)/g, '$1<span class="italic">$2</span>$3');
 
-            // 4. XỬ LÝ LINK THÔNG MINH (Không treo máy, không cắt link)
-            // Bỏ ngoặc đơn () trong regex để tránh lỗi TypeError
+            // 5. XỬ LÝ LINK THÔNG MINH
+            // Regex bắt link (đã bỏ dấu ngoặc đơn để tránh lỗi)
             const urlRegex = /https?:\/\/[^\s<"]+/g;
             
             const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
-                // Kiểm tra xem Link này có xuất hiện lại ở phía sau không?
+                // Kiểm tra xem Link này có xuất hiện lại ở phía sau không? (Lọc trùng)
                 if (fullString.indexOf(url, offset + url.length) !== -1) {
-                    return ""; // Nếu còn lặp lại phía sau -> XÓA link này đi (ẩn đi)
+                    return ""; // Nếu còn lặp lại phía sau -> XÓA link này đi
                 }
 
                 // Nếu là link cuối cùng -> TẠO NÚT
@@ -168,7 +172,7 @@
                 return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">👉 Đọc bài gốc</a>`;
             });
 
-            // 5. Xuống dòng
+            // 6. Xuống dòng
             return linkifiedText.replace(/\n/g, '<br>');
         }
 
