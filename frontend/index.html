@@ -60,24 +60,27 @@
 
         /* --- STYLE NÚT ĐỌC BÀI GỐC (ĐÃ CHỈNH THEO Ý BẠN) --- */
         .tiny-btn {
-            display: inline-block; /* Xuống dòng riêng hoặc khối nội dòng */
-            margin-top: 8px;       /* Cách đoạn trên */
-            margin-bottom: 4px;    /* Cách đoạn dưới */
-            background-color: #7f1d1d; /* Nâu đỏ đậm (Rất trang nghiêm) */
-            color: #fcd34d !important; /* Chữ màu Vàng sáng (!important để đè màu mặc định) */
+            display: inline-block;
+            margin-top: 8px;
+            margin-bottom: 4px;
+            
+            /* SỬA LẠI MÀU NÚT CHO NỔI TRÊN NỀN NÂU ĐỎ */
+            background-color: #f59e0b; /* Màu Cam Vàng (Amber-500) */
+            color: #451a03 !important; /* Chữ Nâu Đậm */
+            
             padding: 6px 16px;     
             border-radius: 20px;   
-            font-size: 13px;       
+            font-size: 13px;        
             font-weight: bold;
             text-decoration: none !important;
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
             transition: all 0.2s;
-            border: 1px solid #991b1b;
+            border: 1px solid #d97706;
         }
         
         .tiny-btn:hover {
-            background-color: #991b1b; /* Sáng hơn khi di chuột */
-            color: #ffffff !important; /* Chuyển sang trắng */
+            background-color: #fbbf24; /* Sáng hơn khi di chuột */
+            color: #000000 !important;
             transform: translateY(-1px);
         }
     </style>
@@ -193,7 +196,7 @@
                 } else if (type === 'info') {
                     messageBubble.classList.add('bg-stone-200', 'text-stone-500', 'text-center', 'w-full', 'max-w-full', 'shadow-none');
                 } else {
-                    messageBubble.classList.add('bg-stone-200', 'text-stone-800');
+                    messageBubble.classList.add('bg-amber-50', 'text-amber-900', 'border', 'border-amber-200');
                 }
             }
 
