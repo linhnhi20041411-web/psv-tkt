@@ -377,87 +377,100 @@ app.post('/api/admin/check-latest', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-// --- API MỚI: QUÉT VÀ XÓA LINK CHẾT (DEAD LINK CLEANUP) ---
-app.post('/api/admin/scan-dead-links', async (req, res) => {
+// --- API 1: LẤY TOÀN BỘ DANH SÁCH URL (VƯỢT GIỚI HẠN 1000) ---
+app.post('/api/admin/get-all-urls', async (req, res) => {
     const { password } = req.body;
-
-    // Thiết lập Streaming Log
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-    res.setHeader('Transfer-Encoding', 'chunked');
-
-    if (password !== ADMIN_PASSWORD) {
-        res.write("❌ Lỗi: Sai mật khẩu Admin!\n");
-        return res.end();
-    }
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
 
     try {
-        res.write("🔍 Đang lấy danh sách URL từ Database...\n");
+        let allUrls = [];
+        let from = 0;
+        let step = 999; // Lấy tối đa 1000 dòng mỗi lần
+        let keepGoing = true;
 
-        // 1. Lấy toàn bộ URL (Distinct) từ Supabase
-        const { data, error } = await supabase
-            .from('vn_buddhism_content')
-            .select('url');
+        // Vòng lặp để lấy hết dữ liệu từ Supabase
+        while (keepGoing) {
+            const { data, error } = await supabase
+                .from('vn_buddhism_content')
+                .select('url')
+                .range(from, from + step);
 
-        if (error) throw error;
+            if (error) throw error;
 
-        // Lọc ra danh sách URL duy nhất (vì 1 bài có nhiều đoạn chunk, chung 1 URL)
-        const uniqueUrls = [...new Set(data.map(item => item.url))];
-        res.write(`📋 Tìm thấy tổng cộng ${uniqueUrls.length} đường link trong bộ nhớ AI.\n`);
-        res.write("🚀 Bắt đầu kiểm tra trạng thái từng Link...\n\n");
+            if (data.length > 0) {
+                // Chỉ lấy url
+                const urls = data.map(item => item.url);
+                allUrls = allUrls.concat(urls);
+                from += step + 1;
+            } else {
+                keepGoing = false; // Hết dữ liệu
+            }
+        }
 
-        let deletedCount = 0;
-        let activeCount = 0;
-        let errorCount = 0;
+        // Lọc trùng lặp
+        const uniqueUrls = [...new Set(allUrls)];
 
-        // 2. Duyệt qua từng URL để kiểm tra
-        for (const url of uniqueUrls) {
+        res.json({ 
+            success: true, 
+            totalRaw: allUrls.length,
+            uniqueCount: uniqueUrls.length,
+            urls: uniqueUrls 
+        });
+
+    } catch (error) {
+        console.error("Lỗi lấy URL:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// --- API 2: KIỂM TRA & XÓA 1 NHÓM URL (BATCH CHECK) ---
+app.post('/api/admin/check-batch', async (req, res) => {
+    const { password, urls } = req.body; // Nhận vào danh sách URL cần check
+
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+    if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: "Thiếu danh sách URL" });
+
+    const results = {
+        checked: 0,
+        deleted: 0,
+        errors: 0,
+        logs: []
+    };
+
+    try {
+        for (const url of urls) {
             try {
-                // Thử truy cập Link (chỉ lấy Header để cho nhanh, không tải nội dung)
+                // Ping thử link (timeout ngắn 5s)
                 await axios.head(url, { timeout: 5000 });
-                
-                // Nếu không lỗi -> Link sống
-                activeCount++;
-                // res.write(`✅ Sống: ${url}\n`); // Có thể ẩn dòng này cho đỡ rối
-
+                results.checked++;
             } catch (err) {
-                // Nếu có lỗi, kiểm tra xem có phải 404 không
+                // Nếu lỗi 404 -> XÓA
                 if (err.response && err.response.status === 404) {
-                    res.write(`❌ PHÁT HIỆN LINK CHẾT: ${url}\n`);
-                    res.write(`   🗑️ Đang xóa dữ liệu khỏi Supabase...\n`);
-
-                    // Xóa toàn bộ dữ liệu liên quan đến URL này
                     const { error: delError } = await supabase
                         .from('vn_buddhism_content')
                         .delete()
                         .eq('url', url);
 
-                    if (delError) {
-                        res.write(`   ⚠️ Lỗi xóa DB: ${delError.message}\n`);
+                    if (!delError) {
+                        results.deleted++;
+                        results.logs.push(`🗑️ Đã xóa link chết: ${url}`);
                     } else {
-                        res.write(`   ✅ Đã xóa thành công!\n`);
-                        deletedCount++;
+                        results.errors++;
+                        results.logs.push(`⚠️ Lỗi xóa DB: ${url}`);
                     }
                 } else {
-                    // Các lỗi khác (Timeout, 500 server error...) thì tạm bỏ qua, không xóa vội
-                    // res.write(`⚠️ Không truy cập được (Lỗi ${err.code || err.response?.status}): ${url}\n`);
-                    errorCount++;
+                    // Lỗi khác (timeout, server error...) thì bỏ qua
+                    results.errors++;
                 }
             }
-            
-            // Nghỉ 100ms giữa các lần check để tránh bị Blogger chặn IP
-            await sleep(100);
+            // Nghỉ cực ngắn 50ms để đỡ lag server
+            await sleep(50);
         }
-
-        res.write(`\n=== TỔNG KẾT ===\n`);
-        res.write(`✅ Link hoạt động tốt: ${activeCount}\n`);
-        res.write(`🗑️ Link chết đã xóa: ${deletedCount}\n`);
-        res.write(`⚠️ Link lỗi khác (chưa xóa): ${errorCount}\n`);
-        res.end();
+        
+        res.json(results);
 
     } catch (error) {
-        console.error("Lỗi Scan Dead Links:", error);
-        res.write(`❌ Lỗi hệ thống: ${error.message}\n`);
-        res.end();
+        res.status(500).json({ error: error.message });
     }
 });
 app.listen(PORT, () => {
