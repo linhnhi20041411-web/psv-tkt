@@ -309,23 +309,87 @@ app.post('/api/admin/get-all-urls', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// --- API 2: KIỂM TRA & XÓA (NÂNG CẤP: PHÁT HIỆN SOFT 404 BLOGGER) ---
 app.post('/api/admin/check-batch', async (req, res) => {
     const { password, urls } = req.body;
+
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
-    const results = { checked: 0, deleted: 0, errors: 0, logs: [] };
+    if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: "Thiếu danh sách URL" });
+
+    const results = {
+        checked: 0,
+        deleted: 0,
+        errors: 0,
+        logs: []
+    };
+
+    // Chuỗi văn bản đặc trưng khi Blogger báo lỗi (Soft 404)
+    const BLOGGER_ERROR_TEXT = "Rất tiếc, trang bạn đang tìm trong blog này không tồn tại";
+    const BLOGGER_ERROR_TEXT_EN = "Sorry, the page you were looking for in this blog does not exist";
+
     try {
         for (const url of urls) {
-            try { await axios.head(url, { timeout: 5000 }); results.checked++; }
-            catch (err) {
-                if (err.response && err.response.status === 404) {
-                    const { error } = await supabase.from('vn_buddhism_content').delete().eq('url', url);
-                    if (!error) { results.deleted++; results.logs.push(`🗑️ Đã xóa: ${url}`); } else results.errors++;
-                } else results.errors++;
+            try {
+                // 1. Dùng GET thay vì HEAD để đọc được nội dung HTML
+                // Timeout tăng lên 8s vì tải HTML lâu hơn tải Header
+                const response = await axios.get(url, { 
+                    timeout: 8000,
+                    validateStatus: function (status) {
+                        return status < 500; // Coi 404 là hợp lệ để xử lý bên dưới
+                    }
+                });
+                
+                let isDeadLink = false;
+
+                // 2. Kiểm tra mã lỗi chuẩn (Hard 404)
+                if (response.status === 404) {
+                    isDeadLink = true;
+                } 
+                // 3. Kiểm tra lỗi "giả vờ" (Soft 404) - Status 200 nhưng nội dung báo lỗi
+                else if (response.status === 200) {
+                    const htmlContent = response.data;
+                    if (typeof htmlContent === 'string') {
+                        // Kiểm tra xem trong HTML có chứa câu báo lỗi của Blogger không
+                        if (htmlContent.includes(BLOGGER_ERROR_TEXT) || htmlContent.includes(BLOGGER_ERROR_TEXT_EN)) {
+                            isDeadLink = true;
+                            results.logs.push(`⚠️ Phát hiện Soft 404 (Blogger): ${url}`);
+                        }
+                    }
+                }
+
+                // 4. Nếu xác định là Link chết -> XÓA
+                if (isDeadLink) {
+                    const { error: delError } = await supabase
+                        .from('vn_buddhism_content')
+                        .delete()
+                        .eq('url', url);
+
+                    if (!delError) {
+                        results.deleted++;
+                        results.logs.push(`🗑️ Đã xóa link chết: ${url}`);
+                    } else {
+                        results.errors++;
+                        results.logs.push(`⚠️ Lỗi xóa DB: ${url}`);
+                    }
+                } else {
+                    results.checked++; // Link sống
+                }
+
+            } catch (err) {
+                // Các lỗi kết nối mạng (DNS, Timeout...) thì tạm bỏ qua, không xóa vội tránh xóa nhầm
+                results.errors++;
+                // console.log(`Lỗi kết nối ${url}: ${err.message}`);
             }
-            await sleep(50);
+            
+            // Nghỉ 100ms giữa các lần check
+            await sleep(100);
         }
+        
         res.json(results);
-    } catch (e) { res.status(500).json({ error: e.message }); }
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.post('/api/admin/check-latest', async (req, res) => {
