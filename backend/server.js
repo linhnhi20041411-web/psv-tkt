@@ -301,32 +301,92 @@ app.post('/api/admin/manual-add', async (req, res) => {
     }
 });
 
-// API CHECK BATCH (Có phát hiện Soft 404)
+// --- API 2: KIỂM TRA & XÓA (PHIÊN BẢN ĐẶC TRỊ BLOGGER SOFT 404) ---
 app.post('/api/admin/check-batch', async (req, res) => {
     const { password, urls } = req.body;
+
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
-    
+    if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: "Thiếu danh sách URL" });
+
     const results = { checked: 0, deleted: 0, errors: 0, logs: [] };
-    const BLOGGER_ERROR_TEXT = "Rất tiếc, trang bạn đang tìm trong blog này không tồn tại";
-    
+
     try {
         for (const url of urls) {
             try {
-                const response = await axios.get(url, { timeout: 8000, validateStatus: s => s < 500 });
-                let isDead = response.status === 404;
-                if (response.status === 200 && typeof response.data === 'string' && response.data.includes(BLOGGER_ERROR_TEXT)) isDead = true;
+                // Tải nội dung trang web (Timeout 10s)
+                const response = await axios.get(url, { 
+                    timeout: 10000, 
+                    validateStatus: status => status < 500 
+                });
+                
+                let isDeadLink = false;
+                let reason = "";
 
-                if (isDead) {
-                    const { error } = await supabase.from('vn_buddhism_content').delete().eq('url', url);
-                    if (!error) { results.deleted++; results.logs.push(`🗑️ Đã xóa: ${url}`); } else results.errors++;
-                } else results.checked++;
-            } catch (err) { results.errors++; }
-            await sleep(100);
+                // TRƯỜNG HỢP 1: Lỗi 404 chuẩn (ít gặp ở Blogger, nhưng vẫn check)
+                if (response.status === 404) {
+                    isDeadLink = true;
+                    reason = "HTTP 404";
+                } 
+                // TRƯỜNG HỢP 2: Soft 404 (Trạng thái 200 nhưng hiện thông báo lỗi)
+                else if (response.status === 200) {
+                    let html = response.data;
+                    
+                    if (typeof html === 'string') {
+                        // --- BƯỚC QUAN TRỌNG NHẤT: CHUẨN HÓA HTML ---
+                        // 1. Chuyển về chữ thường
+                        // 2. Thay thế tất cả xuống dòng, tab, khoảng trắng kép thành 1 khoảng trắng đơn
+                        const cleanHtml = html.toLowerCase().replace(/\s+/g, ' ');
+
+                        // --- CÁC CÂU BÁO LỖI ĐẶC TRƯNG CỦA BLOGGER ---
+                        // Lưu ý: Viết chữ thường, không dấu câu thừa
+                        const errorPhrases = [
+                            "rất tiếc, trang bạn đang tìm trong blog này không tồn tại", // Tiếng Việt
+                            "sorry, the page you were looking for in this blog does not exist", // Tiếng Anh
+                            "không tìm thấy trang", // Tiêu đề thường gặp
+                            "page not found"
+                        ];
+
+                        // Kiểm tra xem HTML đã chuẩn hóa có chứa câu nào không
+                        for (const phrase of errorPhrases) {
+                            if (cleanHtml.includes(phrase)) {
+                                isDeadLink = true;
+                                reason = `Phát hiện câu: "${phrase.substring(0, 20)}..."`;
+                                break; // Tìm thấy 1 lỗi là đủ
+                            }
+                        }
+                    }
+                }
+
+                // XỬ LÝ XÓA
+                if (isDeadLink) {
+                    const { error: delError } = await supabase
+                        .from('vn_buddhism_content')
+                        .delete()
+                        .eq('url', url);
+
+                    if (!delError) {
+                        results.deleted++;
+                        results.logs.push(`🗑️ Đã xóa (${reason}): ${url}`);
+                    } else {
+                        results.errors++;
+                        results.logs.push(`⚠️ Lỗi xóa DB: ${url}`);
+                    }
+                } else {
+                    results.checked++;
+                }
+
+            } catch (err) {
+                // Lỗi mạng hoặc lỗi khác -> Không xóa để an toàn
+                results.errors++;
+            }
+            
+            // Nghỉ nhẹ 50ms
+            await sleep(50);
         }
         res.json(results);
-    } catch (e) { 
-        await sendTelegramAlert(`❌ Lỗi Check Batch:\n${e.message}`);
-        res.status(500).json({ error: e.message }); 
+
+    } catch (error) {
+        res.status(500).json({ error: error.message });
     }
 });
 
