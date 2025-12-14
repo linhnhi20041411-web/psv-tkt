@@ -377,7 +377,89 @@ app.post('/api/admin/check-latest', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+// --- API MỚI: QUÉT VÀ XÓA LINK CHẾT (DEAD LINK CLEANUP) ---
+app.post('/api/admin/scan-dead-links', async (req, res) => {
+    const { password } = req.body;
 
+    // Thiết lập Streaming Log
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    if (password !== ADMIN_PASSWORD) {
+        res.write("❌ Lỗi: Sai mật khẩu Admin!\n");
+        return res.end();
+    }
+
+    try {
+        res.write("🔍 Đang lấy danh sách URL từ Database...\n");
+
+        // 1. Lấy toàn bộ URL (Distinct) từ Supabase
+        const { data, error } = await supabase
+            .from('vn_buddhism_content')
+            .select('url');
+
+        if (error) throw error;
+
+        // Lọc ra danh sách URL duy nhất (vì 1 bài có nhiều đoạn chunk, chung 1 URL)
+        const uniqueUrls = [...new Set(data.map(item => item.url))];
+        res.write(`📋 Tìm thấy tổng cộng ${uniqueUrls.length} đường link trong bộ nhớ AI.\n`);
+        res.write("🚀 Bắt đầu kiểm tra trạng thái từng Link...\n\n");
+
+        let deletedCount = 0;
+        let activeCount = 0;
+        let errorCount = 0;
+
+        // 2. Duyệt qua từng URL để kiểm tra
+        for (const url of uniqueUrls) {
+            try {
+                // Thử truy cập Link (chỉ lấy Header để cho nhanh, không tải nội dung)
+                await axios.head(url, { timeout: 5000 });
+                
+                // Nếu không lỗi -> Link sống
+                activeCount++;
+                // res.write(`✅ Sống: ${url}\n`); // Có thể ẩn dòng này cho đỡ rối
+
+            } catch (err) {
+                // Nếu có lỗi, kiểm tra xem có phải 404 không
+                if (err.response && err.response.status === 404) {
+                    res.write(`❌ PHÁT HIỆN LINK CHẾT: ${url}\n`);
+                    res.write(`   🗑️ Đang xóa dữ liệu khỏi Supabase...\n`);
+
+                    // Xóa toàn bộ dữ liệu liên quan đến URL này
+                    const { error: delError } = await supabase
+                        .from('vn_buddhism_content')
+                        .delete()
+                        .eq('url', url);
+
+                    if (delError) {
+                        res.write(`   ⚠️ Lỗi xóa DB: ${delError.message}\n`);
+                    } else {
+                        res.write(`   ✅ Đã xóa thành công!\n`);
+                        deletedCount++;
+                    }
+                } else {
+                    // Các lỗi khác (Timeout, 500 server error...) thì tạm bỏ qua, không xóa vội
+                    // res.write(`⚠️ Không truy cập được (Lỗi ${err.code || err.response?.status}): ${url}\n`);
+                    errorCount++;
+                }
+            }
+            
+            // Nghỉ 100ms giữa các lần check để tránh bị Blogger chặn IP
+            await sleep(100);
+        }
+
+        res.write(`\n=== TỔNG KẾT ===\n`);
+        res.write(`✅ Link hoạt động tốt: ${activeCount}\n`);
+        res.write(`🗑️ Link chết đã xóa: ${deletedCount}\n`);
+        res.write(`⚠️ Link lỗi khác (chưa xóa): ${errorCount}\n`);
+        res.end();
+
+    } catch (error) {
+        console.error("Lỗi Scan Dead Links:", error);
+        res.write(`❌ Lỗi hệ thống: ${error.message}\n`);
+        res.end();
+    }
+});
 app.listen(PORT, () => {
     console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
