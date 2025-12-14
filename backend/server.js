@@ -98,7 +98,7 @@ async function sendTelegramAlert(message) {
         // Gửi tin nhắn
         await axios.post(url, {
             chat_id: TELEGRAM_CHAT_ID,
-            text: `🚨 <b>CẢNH BÁO LỖI SERVER</b> 🚨\n\n${message}`,
+            text: `🚨 <b>PSV ẢO VĂN TƯ TU</b> 🚨\n\n${message}`,
             parse_mode: 'HTML'
         });
     } catch (error) {
