@@ -366,6 +366,34 @@ app.get('/api/test-telegram', async (req, res) => {
     }
 });
 
+// --- API XÓA BÀI VIẾT (THEO URL) ---
+app.post('/api/admin/delete-post', async (req, res) => {
+    const { password, url } = req.body;
+
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu Admin!" });
+    if (!url) return res.status(400).json({ error: "Thiếu URL bài viết cần xóa!" });
+
+    try {
+        // Xóa tất cả các đoạn (chunks) có cùng URL này
+        const { error, count } = await supabase
+            .from('vn_buddhism_content')
+            .delete({ count: 'exact' }) // Đếm số dòng bị xóa
+            .eq('url', url);
+
+        if (error) throw error;
+
+        if (count === 0) {
+            return res.json({ success: false, message: "Không tìm thấy bài viết này trong Database." });
+        }
+
+        res.json({ success: true, message: `Đã xóa vĩnh viễn bài viết (Gồm ${count} đoạn dữ liệu).` });
+
+    } catch (error) {
+        console.error("Lỗi xóa bài:", error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
