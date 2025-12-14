@@ -367,6 +367,7 @@ app.post('/api/admin/check-batch', async (req, res) => {
                     if (!delError) {
                         results.deleted++;
                         results.logs.push(`🗑️ Đã xóa (${reason}): ${url}`);
+                        await sendTelegramAlert(`🗑️ <b>ĐÃ XÓA LINK HỎNG:</b>\nURL: ${url}\nLý do: ${reason}`);
                     } else {
                         results.errors++;
                         results.logs.push(`⚠️ Lỗi xóa DB: ${url}`);
