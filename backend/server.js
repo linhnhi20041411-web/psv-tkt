@@ -24,7 +24,50 @@ if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- 2. CÁC HÀM TIỆN ÍCH ---
+// --- 2. BỘ TỪ ĐIỂN VIẾT TẮT (ĐÃ CẬP NHẬT ĐẦY ĐỦ THEO YÊU CẦU) ---
+// Hệ thống sẽ tự động thay thế các từ này trước khi xử lý
+const TU_DIEN_VIET_TAT = {
+    "pmtl": "Pháp Môn Tâm Linh",
+    "btpp": "Bạch Thoại Phật Pháp",
+    "nnn": "Ngôi nhà nhỏ",
+    "psv": "Phụng Sự Viên",
+    "sh": "Sư Huynh",
+    "kbt": "Kinh Bài Tập",
+    "ps": "Phóng Sinh",
+    "cđb": "Chú Đại Bi",
+    "cdb": "Chú Đại Bi", 
+    "tk": "Tâm Kinh",
+    "lpdshv": "Lễ Phật Đại Sám Hối Văn",
+    "vsc": "Vãng Sanh Chú",
+    "cdbstc": "Công Đức Bảo Sơn Thần Chú",
+    "cđbstc": "Công Đức Bảo Sơn Thần Chú",
+    "nyblvdln": "Như Ý Bảo Luân Vương Đà La Ni",
+    "bkcn": "Bổ Khuyết Chân Ngôn",
+    "tpdtcn": "Thất Phật Diệt Tội Chân Ngôn",
+    "qalccn": "Quán Âm Linh Cảm Chân Ngôn",
+    "tvltqdqmvtdln": "Thánh Vô Lượng Thọ Quyết Định Quang Minh Vương Đà La Ni",
+};
+
+// Hàm dịch từ viết tắt (Không phân biệt hoa thường)
+function dichVietTat(text) {
+    if (!text) return "";
+    let processedText = text;
+    
+    // Sắp xếp từ khóa dài thay thế trước để tránh lỗi chồng chéo
+    const keys = Object.keys(TU_DIEN_VIET_TAT).sort((a, b) => b.length - a.length);
+
+    keys.forEach(shortWord => {
+        const fullWord = TU_DIEN_VIET_TAT[shortWord];
+        // Regex: \b là ranh giới từ (để tránh thay thế nhầm chữ nằm trong từ khác)
+        // 'gi': g = global (thay tất cả), i = case-insensitive (không phân biệt hoa thường)
+        const regex = new RegExp(`\\b${shortWord}\\b`, 'gi');
+        processedText = processedText.replace(regex, fullWord);
+    });
+    
+    return processedText;
+}
+
+// --- 3. CÁC HÀM TIỆN ÍCH ---
 function getRandomStartIndex() { return Math.floor(Math.random() * apiKeys.length); }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -49,12 +92,12 @@ function chunkText(text, maxChunkSize = 2000) {
     return chunks;
 }
 
-// --- 3. GỌI GEMINI (Dùng chung cho cả Chat và Phân tích) ---
+// --- 4. GỌI GEMINI ---
 async function callGeminiAPI(payload, keyIndex = 0, retryCount = 0) {
     if (retryCount >= apiKeys.length) throw new Error("Hết Key Gemini.");
     const currentIndex = keyIndex % apiKeys.length;
     const currentKey = apiKeys[currentIndex];
-    const model = "gemini-2.5-flash"; // Model nhanh và rẻ để phân tích keyword
+    const model = "gemini-2.5-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
 
     try {
@@ -69,31 +112,19 @@ async function callGeminiAPI(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- 4. HÀM AI TRÍCH XUẤT TỪ KHÓA (QUAN TRỌNG NHẤT) ---
-// Đây là bộ não phân tích câu hỏi trước khi tìm kiếm
+// --- 5. AI EXTRACT KEYWORDS (ĐÃ CẬP NHẬT INPUT ĐÃ DỊCH) ---
 async function aiExtractKeywords(userQuestion) {
     const prompt = `
-    Nhiệm vụ: Bạn là một chuyên gia tìm kiếm dữ liệu (SEO Expert).
-    Hãy phân tích câu hỏi của người dùng và trích xuất ra "Cụm từ khóa trọng tâm" (Search Query) để tìm trong cơ sở dữ liệu.
+    Nhiệm vụ: Bạn là chuyên gia tìm kiếm (SEO). 
+    Hãy trích xuất "Cụm từ khóa trọng tâm" (Search Query) từ câu hỏi.
     
     Yêu cầu:
-    1. Loại bỏ hoàn toàn các từ ngữ giao tiếp, đại từ nhân xưng, từ đệm (ví dụ: "mình muốn", "cho hỏi", "có khai thị nào", "liên quan không", "về việc", "như thế nào"...).
-    2. Chỉ giữ lại DANH TỪ và ĐỘNG TỪ chính mô tả vấn đề cụ thể.
-    3. Kết quả trả về CHỈ LÀ TỪ KHÓA, không thêm dấu ngoặc kép hay giải thích.
+    1. Loại bỏ từ giao tiếp (mình, muốn, cho hỏi, là gì, thế nào...).
+    2. Giữ lại DANH TỪ và ĐỘNG TỪ chính mô tả vấn đề.
+    3. Trả về CHỈ TỪ KHÓA.
 
-    Ví dụ 1:
-    Input: "mình muốn mở nhà hàng chay, có khai thị nào liên quan không ?"
-    Output: mở nhà hàng chay
-
-    Ví dụ 2:
-    Input: "làm sao để niệm kinh cho người bệnh ung thư"
-    Output: niệm kinh ung thư
-
-    Ví dụ 3:
-    Input: "ý nghĩa của việc phóng sinh là gì vậy bạn"
-    Output: ý nghĩa phóng sinh
-
-    Input hiện tại: "${userQuestion}"
+    Ví dụ: "ý nghĩa của việc phóng sinh là gì" -> phóng sinh ý nghĩa
+    Input: "${userQuestion}"
     Output:
     `;
 
@@ -103,16 +134,14 @@ async function aiExtractKeywords(userQuestion) {
             contents: [{ parts: [{ text: prompt }] }]
         }, startIndex);
         
-        const keywords = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
-        // Xử lý sạch sẽ (bỏ xuống dòng nếu có)
-        return keywords.replace(/\n/g, " ").trim();
+        return response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim().replace(/\n/g, " ") || userQuestion;
     } catch (e) {
         console.error("Lỗi AI Extract:", e.message);
-        return userQuestion; // Nếu lỗi thì dùng tạm câu gốc
+        return userQuestion;
     }
 }
 
-// --- 5. HÀM EMBEDDING (Vector) ---
+// --- 6. HÀM EMBEDDING & SEARCH ---
 async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
     if (retryCount >= apiKeys.length) throw new Error("Hết Key Embedding.");
     const currentIndex = keyIndex % apiKeys.length;
@@ -132,7 +161,6 @@ async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- 6. HÀM TÌM KIẾM SUPABASE ---
 async function searchSupabaseContext(query) {
     try {
         const startIndex = getRandomStartIndex();
@@ -141,7 +169,7 @@ async function searchSupabaseContext(query) {
         const { data, error } = await supabase.rpc('hybrid_search', {
             query_text: query,
             query_embedding: queryVector,
-            match_count: 20, // Lấy 20 bài tốt nhất
+            match_count: 20, 
             rrf_k: 60
         });
 
@@ -153,21 +181,24 @@ async function searchSupabaseContext(query) {
     }
 }
 
-// --- 7. API CHAT (LOGIC MỚI: AI-DRIVEN) ---
+// --- 7. API CHAT (CÓ DỊCH VIẾT TẮT) ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // BƯỚC 1: DÙNG AI ĐỂ HIỂU Ý ĐỊNH VÀ TRÍCH XUẤT TỪ KHÓA
-        // Thay vì dùng code cứng nhắc, ta nhờ Gemini "dịch" câu hỏi người dùng thành ngôn ngữ tìm kiếm.
-        const searchKeywords = await aiExtractKeywords(question);
+        // BƯỚC 1: DỊCH VIẾT TẮT (QUAN TRỌNG)
+        // "lpdshv có tác dụng gì" -> "Lễ Phật Đại Sám Hối Văn có tác dụng gì"
+        const fullQuestion = dichVietTat(question);
         
-        console.log(`🗣️ User hỏi: "${question}"`);
-        console.log(`🧠 AI Phân tích ra từ khóa: "${searchKeywords}"`);
+        // BƯỚC 2: AI TRÍCH XUẤT TỪ KHÓA TỪ CÂU ĐÃ DỊCH
+        const searchKeywords = await aiExtractKeywords(fullQuestion);
+        
+        console.log(`🗣️ User (Gốc): "${question}"`);
+        console.log(`📝 Đã dịch: "${fullQuestion}"`);
+        console.log(`🧠 Từ khóa AI: "${searchKeywords}"`);
 
-        // BƯỚC 2: TÌM KIẾM BẰNG TỪ KHÓA CỦA AI
-        // Lúc này searchKeywords sẽ là "mở nhà hàng chay" -> Khớp 100% với bài viết trong DB
+        // BƯỚC 3: TÌM KIẾM
         const documents = await searchSupabaseContext(searchKeywords);
 
         if (!documents) {
@@ -184,19 +215,19 @@ app.post('/api/chat', async (req, res) => {
             `;
         });
 
-        // BƯỚC 3: TRẢ LỜI
+        // BƯỚC 4: TRẢ LỜI
         const systemPrompt = `
         Bạn là Phụng Sự Viên Ảo.
-        Câu hỏi gốc: "${question}"
-        Từ khóa trọng tâm: "${searchKeywords}" (Đây là chủ đề chính, hãy bám sát nó).
+        Câu hỏi gốc (đã dịch nghĩa): "${fullQuestion}"
+        Từ khóa trọng tâm: "${searchKeywords}"
 
         Dữ liệu tham khảo (Context):
         ${contextString}
 
         Yêu cầu:
-        1. Tìm trong Context bài viết nào khớp nhất với "Từ khóa trọng tâm" (Ví dụ: nếu từ khóa là "mở nhà hàng", hãy ưu tiên bài nói về việc mở nhà hàng, bỏ qua các bài chỉ nói về ăn chay chung chung).
-        2. Trả lời câu hỏi dựa trên bài viết khớp nhất đó.
-        3. Cuối câu trả lời, BẮT BUỘC dán Link gốc (URL) của bài viết tham khảo.
+        1. Tìm bài viết khớp nhất với "Từ khóa trọng tâm".
+        2. Trả lời câu hỏi dựa trên bài viết đó.
+        3. Cuối câu trả lời, BẮT BUỘC dán Link gốc (URL).
 
         Trả lời:
         `;
@@ -215,34 +246,24 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// ... (Các API Admin/Sync giữ nguyên như cũ, không cần sửa) ...
-// API Sync Blogger, Manual Add, Check Latest, Get All Urls, Check Batch 
-// Bạn copy lại các đoạn API Admin từ câu trả lời trước vào đây nhé.
-// Để cho gọn mình không paste lại toàn bộ phần Admin ở đây.
-
-// --- API SYNC BLOGGER ---
+// --- CÁC API ADMIN (GIỮ NGUYÊN) ---
 app.post('/api/admin/sync-blogger', async (req, res) => {
     const { password, blogUrl } = req.body;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8'); res.setHeader('Transfer-Encoding', 'chunked');
     if (password !== ADMIN_PASSWORD) { res.write("❌ Sai mật khẩu!\n"); return res.end(); }
-    
     try {
         const cleanBlogUrl = blogUrl.replace(/\/$/, "");
         const rssUrl = `${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`;
         res.write(`📡 Đang kết nối RSS: ${rssUrl}\n`);
         const feed = await parser.parseURL(rssUrl);
         res.write(`✅ Tìm thấy ${feed.items.length} bài.\n`);
-        
         for (const post of feed.items) {
             const { count } = await supabase.from('vn_buddhism_content').select('*', { count: 'exact', head: true }).eq('url', post.link);
             if (count > 0) continue;
-            
             const cleanContent = cleanText(post.content || post['content:encoded'] || "");
             if (cleanContent.length < 50) continue;
-            
             const chunks = chunkText(cleanContent);
             res.write(`⚙️ Nạp: ${post.title.substring(0,30)}...\n`);
-            
             for (const chunk of chunks) {
                 try {
                     const embedding = await callEmbeddingWithRetry(`Tiêu đề: ${post.title}\nNội dung: ${chunk}`, getRandomStartIndex());
@@ -257,7 +278,6 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
     } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); res.end(); }
 });
 
-// API MANUAL ADD
 app.post('/api/admin/manual-add', async (req, res) => {
     const { password, url, title, content } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
@@ -272,6 +292,50 @@ app.post('/api/admin/manual-add', async (req, res) => {
             await sleep(300);
         }
         res.json({ message: "Thành công!", logs: ["Đã lưu xong."] });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/get-all-urls', async (req, res) => {
+    const { password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+    try {
+        let allUrls = [], from = 0, step = 999, keepGoing = true;
+        while (keepGoing) {
+            const { data, error } = await supabase.from('vn_buddhism_content').select('url').range(from, from + step);
+            if (error) throw error;
+            if (data.length > 0) { allUrls = allUrls.concat(data.map(i => i.url)); from += step + 1; } else { keepGoing = false; }
+        }
+        res.json({ success: true, urls: [...new Set(allUrls)] });
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/check-batch', async (req, res) => {
+    const { password, urls } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+    const results = { checked: 0, deleted: 0, errors: 0, logs: [] };
+    try {
+        for (const url of urls) {
+            try { await axios.head(url, { timeout: 5000 }); results.checked++; }
+            catch (err) {
+                if (err.response && err.response.status === 404) {
+                    const { error } = await supabase.from('vn_buddhism_content').delete().eq('url', url);
+                    if (!error) { results.deleted++; results.logs.push(`🗑️ Đã xóa: ${url}`); } else results.errors++;
+                } else results.errors++;
+            }
+            await sleep(50);
+        }
+        res.json(results);
+    } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/api/admin/check-latest', async (req, res) => {
+    const { password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+    try {
+        const { data } = await supabase.from('vn_buddhism_content').select('id, url, metadata, created_at').order('id', { ascending: false }).limit(20);
+        const unique = []; const seen = new Set();
+        data.forEach(i => { if (!seen.has(i.url)) { seen.add(i.url); unique.push(i); } });
+        res.json({ success: true, data: unique });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
