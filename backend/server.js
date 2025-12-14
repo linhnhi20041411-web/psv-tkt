@@ -28,14 +28,47 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // --- 2. BỘ TỪ ĐIỂN VIẾT TẮT ---
 const TU_DIEN_VIET_TAT = {
     "lpdshv": "Lễ Phật Đại Sám Hối Văn",
-    "ctc": "Chú Tiểu Chú",
-    "dldb": "Đại Lễ Đại Bi",
-    "xlp": "Xá Lợi Phất",
-    "ht": "Huyền Trang",
+    "pmtl": "Pháp Môn Tâm Linh",
+    "btpp": "Bạch Thoại Phật Pháp",
+    "nnn": "Ngôi nhà nhỏ",
+    "kbt": "Kinh Bài Tập",
     "ps": "Phóng sinh",
-    "xf": "Xoay pháp",
-    "knt": "Khai Nghiệp Tướng",
+    "psv": "Phụng Sự Viên",
+    "sh": "Sư Huynh",
+    "cđb": "Chú Đại Bi",
+    "tk": "Tâm Kinh",
+    "vsc": "Vãng Sanh Chú",
+    "cdbstc": "Công Đức Bảo Sơn Thần Chú",
+    "bkcn": "Bổ Khuyết Chân Ngôn",
+    "tpdtcn": "Thất Phật Diệt Tội Chân Ngôn",
+    "qalccn": "Quán Âm Linh Cảm Chân Ngôn",
+    "tvlt": "Thánh Vô Lượng Thọ",
+    "nyblv": "Như Ý Bảo Luân Vương",
 };
+
+// --- BỔ SUNG: DANH SÁCH TỪ NHIỄU (STOPWORDS) ---
+const TU_NHIEU = [
+    "mình", "tôi", "tớ", "bạn", "anh", "chị", "em", "con", "thầy", "cô",
+    "muốn", "cần", "định", "tính", "đang", "sẽ", "đã",
+    "cho", "hỏi", "biết", "với", "về", "như", "thế", "nào", "gì", "đâu", "khi",
+    "có", "không", "liên", "quan", "khai", "thị", "bài", "viết", "thông", "tin",
+    "giúp", "dùm", "hộ", "làm", "sao", "cách", "hướng", "dẫn", "là", "của", "những", "các"
+];
+
+function locTuNhieu(text) {
+    if (!text) return "";
+    let words = text.split(/\s+/); // Tách chuỗi thành mảng các từ
+    
+    // Chỉ giữ lại những từ KHÔNG nằm trong danh sách từ nhiễu
+    let keywords = words.filter(word => {
+        // Chuyển về chữ thường và bỏ dấu câu để so sánh
+        const cleanWord = word.toLowerCase().replace(/[.,;!?()"]+/g, "");
+        return !TU_NHIEU.includes(cleanWord);
+    });
+    
+    // Ghép lại thành chuỗi
+    return keywords.join(" ");
+}
 
 function dichVietTat(text) {
     if (!text) return "";
@@ -156,10 +189,21 @@ app.post('/api/chat', async (req, res) => {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
+        // 1. Dịch từ viết tắt trước (LPDSHV -> Lễ Phật...)
         const fullQuestion = dichVietTat(question);
-        console.log(`🔍 Chat: "${question}" -> Dịch: "${fullQuestion}"`);
+        
+        // 2. [MỚI] Lọc từ nhiễu để lấy "Ý chính"
+        // Ví dụ: "mình muốn mở nhà hàng chay có khai thị nào không" -> "mở nhà hàng chay"
+        const searchQuery = locTuNhieu(fullQuestion);
 
-        const documents = await searchSupabaseContext(fullQuestion);
+        console.log(`🔍 User: "${question}"`);
+        console.log(`🧹 Search Query: "${searchQuery}"`); 
+
+        // 3. Tìm kiếm bằng SEARCH QUERY (Ngắn gọn để khớp tiêu đề bài viết)
+        // Nếu lọc xong mà chuỗi rỗng hoặc quá ngắn (dưới 2 ký tự), thì dùng lại câu đầy đủ cho an toàn
+        const queryToUse = searchQuery.length > 2 ? searchQuery : fullQuestion;
+        
+        const documents = await searchSupabaseContext(queryToUse);
 
         if (!documents) {
             return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" });
@@ -167,25 +211,32 @@ app.post('/api/chat', async (req, res) => {
 
         let contextString = "";
         documents.forEach((doc, index) => {
+            // Thêm Tiêu đề vào Context để AI nhận biết bài viết nào khớp nhất
             contextString += `
             --- Nguồn #${index + 1} ---
             Link gốc: ${doc.url || 'N/A'}
+            Tiêu đề: ${doc.metadata?.title || 'Không có tiêu đề'}
             Nội dung: ${doc.content}
             `;
         });
 
+        // 4. CẬP NHẬT PROMPT ĐỂ THÔNG MINH HƠN
         const systemPrompt = `
         Bạn là Phụng Sự Viên Ảo của trang "Tìm Khai Thị".
         Nhiệm vụ: Trả lời câu hỏi dựa trên context bên dưới.
-        Yêu cầu BẮT BUỘC:
-        1. Chỉ dùng thông tin trong context.
-        2. QUAN TRỌNG: Sau mỗi ý trả lời, BẮT BUỘC dán ngay đường Link gốc (URL) vào ngay sau dấu chấm câu.
-        3. Chỉ dán URL trần, KHÔNG viết thêm chữ như "(Xem: ...)" hay markdown. Ví dụ đúng: "...cần tịnh tâm. https://..."
-        4. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh".
+        
+        Quy tắc tư duy (BẮT BUỘC):
+        1. "Câu hỏi rút gọn" là trọng tâm vấn đề. Hãy tìm trong Context xem có bài nào Tiêu đề hoặc Nội dung khớp với "Câu hỏi rút gọn" nhất không.
+        2. Nếu thấy bài có nội dung khớp ý định (Intent) của người dùng (ví dụ: mở nhà hàng), hãy ưu tiên trích dẫn bài đó đầu tiên.
+        3. Tuyệt đối trung thành với Context.
+        4. Sau mỗi ý trả lời, BẮT BUỘC dán Link gốc (URL).
+        5. Giọng văn: Khiêm cung, xưng "đệ", gọi "Sư huynh".
+        
         Context:
         ${contextString}
-        Câu hỏi gốc: ${question}
-        Ý nghĩa đầy đủ: ${fullQuestion}
+        
+        Câu hỏi gốc (đầy đủ): ${question}
+        Câu hỏi rút gọn (trọng tâm): ${searchQuery}
         `;
 
         const startIndex = getRandomStartIndex();
