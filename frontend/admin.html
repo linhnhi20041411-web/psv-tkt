@@ -51,8 +51,16 @@
         <div id="contentMaintain" class="hidden space-y-4 max-w-md mx-auto">
             <div class="bg-red-50 border border-red-200 p-4 rounded-lg">
                 <h3 class="text-red-800 font-bold mb-2">⚠️ Quét Link Chết (Deep Scan)</h3>
-                <p class="text-sm text-red-600 mb-4">Hệ thống sẽ tải toàn bộ danh sách URL và kiểm tra từng lô nhỏ (Batch) để đảm bảo không bị sót.</p>
+                <p class="text-sm text-red-600 mb-4">Quét toàn bộ Link. Nếu gặp lỗi, hệ thống sẽ tự động thử lại.</p>
                 
+                <div class="mb-4">
+                    <label class="block text-sm font-bold text-gray-700 mb-1">Bắt đầu từ số thứ tự:</label>
+                    <div class="flex gap-2">
+                        <input type="number" id="startIndex" value="0" class="w-24 px-3 py-2 border rounded-lg focus:ring-1 focus:ring-red-500 text-center font-bold">
+                        <span class="text-xs text-gray-500 flex items-center">(Nhập số 3400 nếu lần trước bị lỗi ở đó)</span>
+                    </div>
+                </div>
+
                 <div class="w-full bg-gray-200 rounded-full h-4 mb-4 hidden" id="progressContainer">
                     <div class="bg-green-600 h-4 rounded-full transition-all duration-300" style="width: 0%" id="progressBar"></div>
                 </div>
@@ -72,6 +80,9 @@
 
     <script>
         const API_URL = "https://psv-tkt.onrender.com"; 
+        
+        // --- HÀM NGỦ (Delay) ---
+        const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
         function switchTab(tab) {
             const tabs = ['tabAuto', 'tabManual', 'tabCheck', 'tabMaintain'];
@@ -125,11 +136,14 @@
             streamRequest(`${API_URL}/api/admin/sync-blogger`, { password: pass, blogUrl }, 'btnSync', '🔄 Bắt Đầu Quét & Cập Nhật');
         }
 
-        // --- HÀM QUÉT LINK CHẾT (ĐÃ NÂNG CẤP CHIA ĐỂ TRỊ) ---
+        // --- HÀM QUÉT LINK CHẾT (ĐÃ NÂNG CẤP RETRY & RESUME) ---
         async function scanDeadLinks() {
             const pass = document.getElementById('password').value;
+            // Lấy giá trị bắt đầu từ ô nhập (Mặc định là 0)
+            const startIndex = parseInt(document.getElementById('startIndex').value) || 0;
+
             if (!pass) return alert("Thiếu mật khẩu!");
-            if (!confirm("Quét toàn bộ 4000+ link sẽ mất vài phút. Bạn có muốn tiếp tục?")) return;
+            if (!confirm(`Hệ thống sẽ bắt đầu quét từ số thứ tự ${startIndex}. Bạn chắc chứ?`)) return;
 
             const btn = document.getElementById('btnScan');
             const progressContainer = document.getElementById('progressContainer');
@@ -153,31 +167,57 @@
                 if (!dataList.success) throw new Error(dataList.error);
 
                 const totalUrls = dataList.urls.length;
-                log(`✅ Đã tải xong: ${totalUrls} link duy nhất (Tổng raw: ${dataList.totalRaw}).\n`);
-                log(`🚀 Bắt đầu kiểm tra từng lô (Batch Check)...\n`);
+                log(`✅ Đã tải xong: ${totalUrls} link.\n`);
+                
+                if (startIndex >= totalUrls) {
+                    throw new Error("Số bắt đầu lớn hơn tổng số link!");
+                }
+
+                log(`🚀 Bắt đầu quét từ vị trí ${startIndex}...\n`);
 
                 // 2. Chia nhỏ và quét
-                const batchSize = 20; // Kiểm tra 20 link mỗi lần
+                const batchSize = 20; 
                 let deletedTotal = 0;
-                let processed = 0;
-
-                for (let i = 0; i < totalUrls; i += batchSize) {
+                
+                // Vòng lặp bắt đầu từ vị trí startIndex
+                for (let i = startIndex; i < totalUrls; i += batchSize) {
                     const batch = dataList.urls.slice(i, i + batchSize);
-                    
-                    // Gọi API check batch
-                    const resCheck = await fetch(`${API_URL}/api/admin/check-batch`, {
-                        method: 'POST', headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ password: pass, urls: batch })
-                    });
-                    const dataCheck = await resCheck.json();
+                    let success = false;
+                    let retryCount = 0;
 
-                    if (dataCheck.logs && dataCheck.logs.length > 0) {
-                        dataCheck.logs.forEach(l => log(l + "\n"));
+                    // Cơ chế tự động thử lại (Retry Loop)
+                    while (!success && retryCount < 5) { // Thử tối đa 5 lần
+                        try {
+                            const resCheck = await fetch(`${API_URL}/api/admin/check-batch`, {
+                                method: 'POST', headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({ password: pass, urls: batch })
+                            });
+
+                            if (!resCheck.ok) throw new Error(`HTTP Error ${resCheck.status}`);
+
+                            const dataCheck = await resCheck.json();
+
+                            if (dataCheck.logs && dataCheck.logs.length > 0) {
+                                dataCheck.logs.forEach(l => log(l + "\n"));
+                            }
+                            deletedTotal += dataCheck.deleted || 0;
+                            success = true; // Thành công, thoát vòng lặp retry
+
+                        } catch (err) {
+                            retryCount++;
+                            log(`⚠️ Lỗi mạng (Thử lại ${retryCount}/5): ${err.message}. Đợi 5s...\n`);
+                            await sleep(5000); // Đợi 5 giây rồi thử lại
+                        }
                     }
-                    deletedTotal += dataCheck.deleted || 0;
+
+                    if (!success) {
+                        log(`❌ QUÁ SỐ LẦN THỬ LẠI! Dừng tại vị trí ${i}. Hãy nhập ${i} vào ô "Bắt đầu từ" để chạy tiếp.\n`);
+                        document.getElementById('startIndex').value = i; // Tự điền số cho lần sau
+                        break; // Dừng chương trình
+                    }
 
                     // Cập nhật tiến trình
-                    processed += batch.length;
+                    const processed = Math.min(i + batchSize, totalUrls);
                     const percent = Math.min(100, Math.round((processed / totalUrls) * 100));
                     progressBar.style.width = `${percent}%`;
                     progressText.innerText = `Đang xử lý: ${processed}/${totalUrls} (${percent}%) - Đã xóa: ${deletedTotal}`;
@@ -185,8 +225,7 @@
                     log(`> Đã check ${processed}/${totalUrls}...\n`);
                 }
 
-                log(`\n🎉 HOÀN TẤT! Tổng số link chết đã xóa: ${deletedTotal}.\n`);
-                alert("Hoàn tất quy trình bảo trì!");
+                log(`\n🎉 HOÀN TẤT PHIÊN LÀM VIỆC! Tổng số link chết đã xóa: ${deletedTotal}.\n`);
 
             } catch (error) {
                 log(`❌ Lỗi: ${error.message}\n`);
