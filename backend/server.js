@@ -356,6 +356,16 @@ app.post('/api/admin/check-latest', async (req, res) => {
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// --- API TEST TELEGRAM (Dùng để kiểm tra kết nối) ---
+app.get('/api/test-telegram', async (req, res) => {
+    try {
+        await sendTelegramAlert("🚀 <b>Test thành công!</b>\nServer của Sư huynh đã kết nối được với Telegram.\n\nChúc Sư huynh một ngày an lạc! 🙏");
+        res.json({ success: true, message: "Đã gửi tin nhắn. Sư huynh kiểm tra điện thoại nhé!" });
+    } catch (error) {
+        res.status(500).json({ error: "Lỗi gửi Telegram: " + error.message });
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`Server đang chạy tại http://localhost:${PORT}`);
 });
