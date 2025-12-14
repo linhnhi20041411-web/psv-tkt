@@ -50,16 +50,22 @@
 
         <div id="contentMaintain" class="hidden space-y-4 max-w-md mx-auto">
             <div class="bg-red-50 border border-red-200 p-4 rounded-lg">
-                <h3 class="text-red-800 font-bold mb-2">⚠️ Vùng Nguy Hiểm</h3>
-                <p class="text-sm text-red-600 mb-4">Chức năng này sẽ kiểm tra toàn bộ Link trong Database. Nếu phát hiện Link không truy cập được (404), hệ thống sẽ <span class="font-bold">XÓA VĨNH VIỄN</span> dữ liệu đó.</p>
+                <h3 class="text-red-800 font-bold mb-2">⚠️ Quét Link Chết (Deep Scan)</h3>
+                <p class="text-sm text-red-600 mb-4">Hệ thống sẽ tải toàn bộ danh sách URL và kiểm tra từng lô nhỏ (Batch) để đảm bảo không bị sót.</p>
+                
+                <div class="w-full bg-gray-200 rounded-full h-4 mb-4 hidden" id="progressContainer">
+                    <div class="bg-green-600 h-4 rounded-full transition-all duration-300" style="width: 0%" id="progressBar"></div>
+                </div>
+                <p id="progressText" class="text-xs text-center font-mono mb-2 text-gray-600"></p>
+
                 <button onclick="scanDeadLinks()" id="btnScan" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition duration-300 flex justify-center items-center">
-                    🗑️ Quét & Xóa Link Chết
+                    🗑️ Bắt Đầu Quét
                 </button>
             </div>
         </div>
 
         <div id="statusArea" class="mt-6 hidden">
-            <h3 class="font-bold text-gray-700 mb-2">Nhật ký hoạt động (Real-time):</h3>
+            <h3 class="font-bold text-gray-700 mb-2">Nhật ký hoạt động:</h3>
             <div id="logs" class="bg-gray-900 text-green-400 text-xs p-4 rounded-lg h-64 overflow-y-auto font-mono whitespace-pre-wrap leading-relaxed"></div>
         </div>
     </div>
@@ -119,16 +125,77 @@
             streamRequest(`${API_URL}/api/admin/sync-blogger`, { password: pass, blogUrl }, 'btnSync', '🔄 Bắt Đầu Quét & Cập Nhật');
         }
 
-        function scanDeadLinks() {
+        // --- HÀM QUÉT LINK CHẾT (ĐÃ NÂNG CẤP CHIA ĐỂ TRỊ) ---
+        async function scanDeadLinks() {
             const pass = document.getElementById('password').value;
-            if (!pass) return alert("Thiếu mật khẩu! Đây là thao tác nguy hiểm.");
-            if (!confirm("Bạn có chắc chắn muốn quét và XÓA các bài viết có link hỏng không?")) return;
-            streamRequest(`${API_URL}/api/admin/scan-dead-links`, { password: pass }, 'btnScan', '🗑️ Quét & Xóa Link Chết');
+            if (!pass) return alert("Thiếu mật khẩu!");
+            if (!confirm("Quét toàn bộ 4000+ link sẽ mất vài phút. Bạn có muốn tiếp tục?")) return;
+
+            const btn = document.getElementById('btnScan');
+            const progressContainer = document.getElementById('progressContainer');
+            const progressBar = document.getElementById('progressBar');
+            const progressText = document.getElementById('progressText');
+
+            btn.disabled = true; btn.innerHTML = "⏳ Đang tải danh sách...";
+            progressContainer.classList.remove('hidden');
+            document.getElementById('statusArea').classList.remove('hidden');
+            const logBox = document.getElementById('logs');
+            logBox.innerHTML = "> Đang tải toàn bộ danh sách URL từ Database...\n";
+
+            try {
+                // 1. Lấy toàn bộ URL
+                const resList = await fetch(`${API_URL}/api/admin/get-all-urls`, {
+                    method: 'POST', headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ password: pass })
+                });
+                const dataList = await resList.json();
+                
+                if (!dataList.success) throw new Error(dataList.error);
+
+                const totalUrls = dataList.urls.length;
+                log(`✅ Đã tải xong: ${totalUrls} link duy nhất (Tổng raw: ${dataList.totalRaw}).\n`);
+                log(`🚀 Bắt đầu kiểm tra từng lô (Batch Check)...\n`);
+
+                // 2. Chia nhỏ và quét
+                const batchSize = 20; // Kiểm tra 20 link mỗi lần
+                let deletedTotal = 0;
+                let processed = 0;
+
+                for (let i = 0; i < totalUrls; i += batchSize) {
+                    const batch = dataList.urls.slice(i, i + batchSize);
+                    
+                    // Gọi API check batch
+                    const resCheck = await fetch(`${API_URL}/api/admin/check-batch`, {
+                        method: 'POST', headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ password: pass, urls: batch })
+                    });
+                    const dataCheck = await resCheck.json();
+
+                    if (dataCheck.logs && dataCheck.logs.length > 0) {
+                        dataCheck.logs.forEach(l => log(l + "\n"));
+                    }
+                    deletedTotal += dataCheck.deleted || 0;
+
+                    // Cập nhật tiến trình
+                    processed += batch.length;
+                    const percent = Math.min(100, Math.round((processed / totalUrls) * 100));
+                    progressBar.style.width = `${percent}%`;
+                    progressText.innerText = `Đang xử lý: ${processed}/${totalUrls} (${percent}%) - Đã xóa: ${deletedTotal}`;
+                    
+                    log(`> Đã check ${processed}/${totalUrls}...\n`);
+                }
+
+                log(`\n🎉 HOÀN TẤT! Tổng số link chết đã xóa: ${deletedTotal}.\n`);
+                alert("Hoàn tất quy trình bảo trì!");
+
+            } catch (error) {
+                log(`❌ Lỗi: ${error.message}\n`);
+            } finally {
+                btn.disabled = false; btn.innerHTML = "🗑️ Bắt Đầu Quét";
+            }
         }
 
-        // Manual Add (Giữ nguyên logic cũ nhưng gọi hàm gọn hơn)
         async function manualAdd() {
-            // (Giống code cũ của bạn, mình viết gọn lại cho đủ chỗ hiển thị)
             const pass = document.getElementById('password').value;
             const url = document.getElementById('manualUrl').value;
             const title = document.getElementById('manualTitle').value;
