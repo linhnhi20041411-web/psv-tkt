@@ -20,6 +20,10 @@ const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "123456"; 
 
+// --- CẤU HÌNH TELEGRAM (Bạn điền trực tiếp hoặc dùng biến môi trường) ---
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || "THAY_TOKEN_CUA_BAN_VAO_DAY";
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "THAY_CHAT_ID_CUA_BAN_VAO_DAY";
+
 if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL hoặc SUPABASE_KEY");
 
 const supabase = createClient(supabaseUrl, supabaseKey);
@@ -48,22 +52,14 @@ const TU_DIEN_VIET_TAT = {
     "tvltqdqmvtdln": "Thánh Vô Lượng Thọ Quyết Định Quang Minh Vương Đà La Ni",
 };
 
-// Hàm dịch từ viết tắt (Không phân biệt hoa thường)
 function dichVietTat(text) {
     if (!text) return "";
     let processedText = text;
-    
-    // Sắp xếp từ khóa dài thay thế trước để tránh lỗi chồng chéo
     const keys = Object.keys(TU_DIEN_VIET_TAT).sort((a, b) => b.length - a.length);
-
     keys.forEach(shortWord => {
-        const fullWord = TU_DIEN_VIET_TAT[shortWord];
-        // Regex: \b là ranh giới từ (để tránh thay thế nhầm chữ nằm trong từ khác)
-        // 'gi': g = global (thay tất cả), i = case-insensitive (không phân biệt hoa thường)
         const regex = new RegExp(`\\b${shortWord}\\b`, 'gi');
-        processedText = processedText.replace(regex, fullWord);
+        processedText = processedText.replace(regex, TU_DIEN_VIET_TAT[shortWord]);
     });
-    
     return processedText;
 }
 
@@ -92,9 +88,31 @@ function chunkText(text, maxChunkSize = 2000) {
     return chunks;
 }
 
-// --- 4. GỌI GEMINI ---
+// --- 4. HỆ THỐNG CẢNH BÁO TELEGRAM (MỚI) ---
+async function sendTelegramAlert(message) {
+    // Nếu chưa cấu hình thì bỏ qua
+    if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID || TELEGRAM_TOKEN.includes("THAY_TOKEN")) return;
+    
+    try {
+        const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
+        // Gửi tin nhắn
+        await axios.post(url, {
+            chat_id: TELEGRAM_CHAT_ID,
+            text: `🚨 <b>CẢNH BÁO LỖI SERVER</b> 🚨\n\n${message}`,
+            parse_mode: 'HTML'
+        });
+    } catch (error) {
+        console.error("Không gửi được Telegram:", error.message);
+    }
+}
+
+// --- 5. GỌI GEMINI ---
 async function callGeminiAPI(payload, keyIndex = 0, retryCount = 0) {
-    if (retryCount >= apiKeys.length) throw new Error("Hết Key Gemini.");
+    if (retryCount >= apiKeys.length) {
+        // Gửi báo động nếu hết sạch Key
+        await sendTelegramAlert("🆘 HẾT SẠCH API KEY GEMINI! Hệ thống không thể trả lời.");
+        throw new Error("Hết Key Gemini.");
+    }
     const currentIndex = keyIndex % apiKeys.length;
     const currentKey = apiKeys[currentIndex];
     const model = "gemini-2.5-flash"; 
@@ -112,28 +130,18 @@ async function callGeminiAPI(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- 5. AI EXTRACT KEYWORDS (ĐÃ CẬP NHẬT INPUT ĐÃ DỊCH) ---
+// --- 6. AI EXTRACT KEYWORDS ---
 async function aiExtractKeywords(userQuestion) {
     const prompt = `
-    Nhiệm vụ: Bạn là chuyên gia tìm kiếm (SEO). 
-    Hãy trích xuất "Cụm từ khóa trọng tâm" (Search Query) từ câu hỏi.
-    
-    Yêu cầu:
-    1. Loại bỏ từ giao tiếp (mình, muốn, cho hỏi, là gì, thế nào...).
-    2. Giữ lại DANH TỪ và ĐỘNG TỪ chính mô tả vấn đề.
-    3. Trả về CHỈ TỪ KHÓA.
-
+    Nhiệm vụ: Bạn là chuyên gia tìm kiếm (SEO). Trích xuất "Từ khóa trọng tâm" từ câu hỏi.
+    Yêu cầu: Bỏ từ giao tiếp, giữ danh từ/động từ chính. Trả về CHỈ TỪ KHÓA.
     Ví dụ: "ý nghĩa của việc phóng sinh là gì" -> phóng sinh ý nghĩa
     Input: "${userQuestion}"
     Output:
     `;
-
     try {
         const startIndex = getRandomStartIndex();
-        const response = await callGeminiAPI({
-            contents: [{ parts: [{ text: prompt }] }]
-        }, startIndex);
-        
+        const response = await callGeminiAPI({ contents: [{ parts: [{ text: prompt }] }] }, startIndex);
         return response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim().replace(/\n/g, " ") || userQuestion;
     } catch (e) {
         console.error("Lỗi AI Extract:", e.message);
@@ -141,9 +149,12 @@ async function aiExtractKeywords(userQuestion) {
     }
 }
 
-// --- 6. HÀM EMBEDDING & SEARCH ---
+// --- 7. EMBEDDING & SEARCH ---
 async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
-    if (retryCount >= apiKeys.length) throw new Error("Hết Key Embedding.");
+    if (retryCount >= apiKeys.length) {
+        await sendTelegramAlert("🆘 Hết Key Embedding (Tạo Vector).");
+        throw new Error("Hết Key Embedding.");
+    }
     const currentIndex = keyIndex % apiKeys.length;
     const currentKey = apiKeys[currentIndex];
 
@@ -165,40 +176,30 @@ async function searchSupabaseContext(query) {
     try {
         const startIndex = getRandomStartIndex();
         const queryVector = await callEmbeddingWithRetry(query, startIndex);
-
         const { data, error } = await supabase.rpc('hybrid_search', {
-            query_text: query,
-            query_embedding: queryVector,
-            match_count: 20, 
-            rrf_k: 60
+            query_text: query, query_embedding: queryVector, match_count: 20, rrf_k: 60
         });
-
         if (error) throw error;
         return data && data.length > 0 ? data : null;
     } catch (error) {
         console.error("Lỗi tìm kiếm:", error.message);
+        // Gửi báo động nếu lỗi Database
+        await sendTelegramAlert(`❌ Lỗi Tìm Kiếm Supabase:\n${error.message}`);
         return null; 
     }
 }
 
-// --- 7. API CHAT (CÓ DỊCH VIẾT TẮT) ---
+// --- 8. API CHAT (CÓ BÁO LỖI TELEGRAM) ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // BƯỚC 1: DỊCH VIẾT TẮT (QUAN TRỌNG)
-        // "lpdshv có tác dụng gì" -> "Lễ Phật Đại Sám Hối Văn có tác dụng gì"
         const fullQuestion = dichVietTat(question);
-        
-        // BƯỚC 2: AI TRÍCH XUẤT TỪ KHÓA TỪ CÂU ĐÃ DỊCH
         const searchKeywords = await aiExtractKeywords(fullQuestion);
         
-        console.log(`🗣️ User (Gốc): "${question}"`);
-        console.log(`📝 Đã dịch: "${fullQuestion}"`);
-        console.log(`🧠 Từ khóa AI: "${searchKeywords}"`);
+        console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
 
-        // BƯỚC 3: TÌM KIẾM
         const documents = await searchSupabaseContext(searchKeywords);
 
         if (!documents) {
@@ -207,57 +208,50 @@ app.post('/api/chat', async (req, res) => {
 
         let contextString = "";
         documents.forEach((doc, index) => {
-            contextString += `
-            --- Nguồn #${index + 1} ---
-            Link: ${doc.url}
-            Tiêu đề: ${doc.metadata?.title || 'Không có tiêu đề'}
-            Nội dung: ${doc.content.substring(0, 800)}... 
-            `;
+            contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
         });
 
-        // BƯỚC 4: TRẢ LỜI
         const systemPrompt = `
         Bạn là Phụng Sự Viên Ảo.
-        Câu hỏi gốc (đã dịch nghĩa): "${fullQuestion}"
+        Câu hỏi gốc: "${fullQuestion}"
         Từ khóa trọng tâm: "${searchKeywords}"
-
-        Dữ liệu tham khảo (Context):
-        ${contextString}
-
-        Yêu cầu:
-        1. Tìm bài viết khớp nhất với "Từ khóa trọng tâm".
-        2. Trả lời câu hỏi dựa trên bài viết đó.
-        3. Cuối câu trả lời, BẮT BUỘC dán Link gốc (URL).
-
-        Trả lời:
+        Dữ liệu tham khảo: ${contextString}
+        Yêu cầu: Trả lời câu hỏi dựa trên bài viết khớp nhất với từ khóa. Cuối câu trả lời DÁN LINK GỐC.
         `;
 
         const startIndex = getRandomStartIndex();
-        const response = await callGeminiAPI({
-            contents: [{ parts: [{ text: systemPrompt }] }]
-        }, startIndex);
+        const response = await callGeminiAPI({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
 
         let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
         res.json({ answer: "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse });
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
+        // BÁO LỖI VỀ TELEGRAM
+        await sendTelegramAlert(`❌ LỖI API CHAT:\nUser: ${req.body.question}\nError: ${error.message}`);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
-// --- CÁC API ADMIN (GIỮ NGUYÊN) ---
+// --- CÁC API ADMIN (CÓ BÁO LỖI TELEGRAM) ---
+
+// API SYNC
 app.post('/api/admin/sync-blogger', async (req, res) => {
     const { password, blogUrl } = req.body;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8'); res.setHeader('Transfer-Encoding', 'chunked');
     if (password !== ADMIN_PASSWORD) { res.write("❌ Sai mật khẩu!\n"); return res.end(); }
+    
     try {
         const cleanBlogUrl = blogUrl.replace(/\/$/, "");
         const rssUrl = `${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`;
-        res.write(`📡 Đang kết nối RSS: ${rssUrl}\n`);
+        res.write(`📡 Kết nối RSS: ${rssUrl}\n`);
+        
         const feed = await parser.parseURL(rssUrl);
         res.write(`✅ Tìm thấy ${feed.items.length} bài.\n`);
+        
+        let errCount = 0;
         for (const post of feed.items) {
+            // ... (Logic cũ)
             const { count } = await supabase.from('vn_buddhism_content').select('*', { count: 'exact', head: true }).eq('url', post.link);
             if (count > 0) continue;
             const cleanContent = cleanText(post.content || post['content:encoded'] || "");
@@ -270,14 +264,23 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
                     await supabase.from('vn_buddhism_content').insert({
                         content: `Tiêu đề: ${post.title}\nNội dung: ${chunk}`, embedding, url: post.link, original_id: 0, metadata: { title: post.title, type: 'rss_auto' }
                     });
-                } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); }
+                } catch (e) { 
+                    res.write(`❌ Lỗi: ${e.message}\n`); 
+                    errCount++;
+                }
             }
             await sleep(300);
         }
+        if (errCount > 5) await sendTelegramAlert(`⚠️ Cảnh báo Sync Blogger: Có ${errCount} lỗi xảy ra trong quá trình nạp.`);
         res.write(`\n🎉 HOÀN TẤT!\n`); res.end();
-    } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); res.end(); }
+    } catch (e) { 
+        res.write(`❌ Lỗi: ${e.message}\n`); 
+        await sendTelegramAlert(`❌ LỖI SYNC BLOGGER:\n${e.message}`);
+        res.end(); 
+    }
 });
 
+// API MANUAL ADD
 app.post('/api/admin/manual-add', async (req, res) => {
     const { password, url, title, content } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
@@ -292,9 +295,42 @@ app.post('/api/admin/manual-add', async (req, res) => {
             await sleep(300);
         }
         res.json({ message: "Thành công!", logs: ["Đã lưu xong."] });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+    } catch (e) { 
+        await sendTelegramAlert(`❌ Lỗi Manual Add (${title}):\n${e.message}`);
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
+// API CHECK BATCH (Có phát hiện Soft 404)
+app.post('/api/admin/check-batch', async (req, res) => {
+    const { password, urls } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+    
+    const results = { checked: 0, deleted: 0, errors: 0, logs: [] };
+    const BLOGGER_ERROR_TEXT = "Rất tiếc, trang bạn đang tìm trong blog này không tồn tại";
+    
+    try {
+        for (const url of urls) {
+            try {
+                const response = await axios.get(url, { timeout: 8000, validateStatus: s => s < 500 });
+                let isDead = response.status === 404;
+                if (response.status === 200 && typeof response.data === 'string' && response.data.includes(BLOGGER_ERROR_TEXT)) isDead = true;
+
+                if (isDead) {
+                    const { error } = await supabase.from('vn_buddhism_content').delete().eq('url', url);
+                    if (!error) { results.deleted++; results.logs.push(`🗑️ Đã xóa: ${url}`); } else results.errors++;
+                } else results.checked++;
+            } catch (err) { results.errors++; }
+            await sleep(100);
+        }
+        res.json(results);
+    } catch (e) { 
+        await sendTelegramAlert(`❌ Lỗi Check Batch:\n${e.message}`);
+        res.status(500).json({ error: e.message }); 
+    }
+});
+
+// API Get All Urls & Check Latest (Giữ nguyên, không cần báo lỗi Telegram cho các API đọc dữ liệu đơn giản này)
 app.post('/api/admin/get-all-urls', async (req, res) => {
     const { password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
@@ -307,89 +343,6 @@ app.post('/api/admin/get-all-urls', async (req, res) => {
         }
         res.json({ success: true, urls: [...new Set(allUrls)] });
     } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-// --- API 2: KIỂM TRA & XÓA (NÂNG CẤP: PHÁT HIỆN SOFT 404 BLOGGER) ---
-app.post('/api/admin/check-batch', async (req, res) => {
-    const { password, urls } = req.body;
-
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
-    if (!urls || !Array.isArray(urls)) return res.status(400).json({ error: "Thiếu danh sách URL" });
-
-    const results = {
-        checked: 0,
-        deleted: 0,
-        errors: 0,
-        logs: []
-    };
-
-    // Chuỗi văn bản đặc trưng khi Blogger báo lỗi (Soft 404)
-    const BLOGGER_ERROR_TEXT = "Rất tiếc, trang bạn đang tìm trong blog này không tồn tại";
-    const BLOGGER_ERROR_TEXT_EN = "Sorry, the page you were looking for in this blog does not exist";
-
-    try {
-        for (const url of urls) {
-            try {
-                // 1. Dùng GET thay vì HEAD để đọc được nội dung HTML
-                // Timeout tăng lên 8s vì tải HTML lâu hơn tải Header
-                const response = await axios.get(url, { 
-                    timeout: 8000,
-                    validateStatus: function (status) {
-                        return status < 500; // Coi 404 là hợp lệ để xử lý bên dưới
-                    }
-                });
-                
-                let isDeadLink = false;
-
-                // 2. Kiểm tra mã lỗi chuẩn (Hard 404)
-                if (response.status === 404) {
-                    isDeadLink = true;
-                } 
-                // 3. Kiểm tra lỗi "giả vờ" (Soft 404) - Status 200 nhưng nội dung báo lỗi
-                else if (response.status === 200) {
-                    const htmlContent = response.data;
-                    if (typeof htmlContent === 'string') {
-                        // Kiểm tra xem trong HTML có chứa câu báo lỗi của Blogger không
-                        if (htmlContent.includes(BLOGGER_ERROR_TEXT) || htmlContent.includes(BLOGGER_ERROR_TEXT_EN)) {
-                            isDeadLink = true;
-                            results.logs.push(`⚠️ Phát hiện Soft 404 (Blogger): ${url}`);
-                        }
-                    }
-                }
-
-                // 4. Nếu xác định là Link chết -> XÓA
-                if (isDeadLink) {
-                    const { error: delError } = await supabase
-                        .from('vn_buddhism_content')
-                        .delete()
-                        .eq('url', url);
-
-                    if (!delError) {
-                        results.deleted++;
-                        results.logs.push(`🗑️ Đã xóa link chết: ${url}`);
-                    } else {
-                        results.errors++;
-                        results.logs.push(`⚠️ Lỗi xóa DB: ${url}`);
-                    }
-                } else {
-                    results.checked++; // Link sống
-                }
-
-            } catch (err) {
-                // Các lỗi kết nối mạng (DNS, Timeout...) thì tạm bỏ qua, không xóa vội tránh xóa nhầm
-                results.errors++;
-                // console.log(`Lỗi kết nối ${url}: ${err.message}`);
-            }
-            
-            // Nghỉ 100ms giữa các lần check
-            await sleep(100);
-        }
-        
-        res.json(results);
-
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
 });
 
 app.post('/api/admin/check-latest', async (req, res) => {
