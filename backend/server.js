@@ -1,6 +1,8 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const http = require('http'); 
+const { Server } = require("socket.io");
 const { createClient } = require('@supabase/supabase-js');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const Parser = require('rss-parser'); 
@@ -8,6 +10,22 @@ require('dotenv').config();
 
 const parser = new Parser();
 const app = express();
+// ---> THÊM ĐOẠN KHỞI TẠO SOCKET NÀY:
+const server = http.createServer(app); // Tạo server bọc lấy app
+const io = new Server(server, {
+    cors: { origin: "*" } // Cho phép mọi nguồn kết nối
+});
+
+// Biến lưu trữ tạm: Tin nhắn Telegram ID -> Socket ID người dùng
+const pendingRequests = new Map();
+
+// Lắng nghe kết nối
+io.on('connection', (socket) => {
+    console.log('👤 User Connected:', socket.id);
+    socket.on('disconnect', () => {
+        // Có thể dọn dẹp pendingRequests nếu cần
+    });
+});
 const PORT = process.env.PORT || 3001;
 
 app.use(express.json({ limit: '50mb' }));
@@ -200,11 +218,9 @@ async function searchSupabaseContext(query) {
         const { data: titleMatches, error: titleError } = await supabase
             .from('vn_buddhism_content')
             .select('*')
-            .textSearch('fts', `'${query}'`, { config: 'english', type: 'websearch' }) // Hoặc dùng .ilike nếu cột metadata->>title có index
-            // Cách đơn giản nhất nếu chưa cấu hình FTS phức tạp là dùng ilike trên metadata
-            // Dưới đây mình dùng ilike cho đơn giản và hiệu quả với tiếng Việt không dấu/có dấu
-            .ilike('content', `%Tiêu đề: %${query}%`) 
-            .limit(5); // Lấy 5 bài khớp tiêu đề nhất
+            // .textSearch('fts', `'${query}'`, { config: 'english', type: 'websearch' }) // <--- Comment dòng này lại hoặc xóa đi
+            .ilike('content', `%Tiêu đề: %${query}%`) // Chỉ giữ lại dòng này là đủ an toàn
+            .limit(5);
 
         // --- CHIẾN THUẬT 2: TÌM THEO VECTOR (SEMANTIC SEARCH) ---
         const startIndex = getRandomStartIndex();
@@ -257,130 +273,102 @@ async function searchSupabaseContext(query) {
 // --- 6. API CHAT (BẢN FINAL: SẠCH DẤU NGOẶC + LINK TRẦN + BÁO LỖI) ---
 app.post('/api/chat', async (req, res) => {
     try {
-        const { question } = req.body; 
+        // 1. NHẬN THÊM socketId TỪ CLIENT
+        const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // A. TÌM KIẾM DỮ LIỆU
         const fullQuestion = dichVietTat(question);
         const searchKeywords = await aiExtractKeywords(fullQuestion);
+        
         console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
+
         const documents = await searchSupabaseContext(searchKeywords);
 
-        if (!documents) {
-            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại: https://timkhaithi.pmtl.site" });
+        // =====================================================================
+        // 2. LOGIC MỚI: KHÔNG TÌM THẤY -> CHUYỂN SANG TELEGRAM
+        // =====================================================================
+        if (!documents || documents.length === 0) {
+            console.log("⚠️ Không có dữ liệu -> Chuyển hướng sang Telegram...");
+
+            // A. Gửi tin nhắn báo động vào nhóm Telegram
+            const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
+                chat_id: process.env.TELEGRAM_CHAT_ID,
+                text: `❓ <b>CÂU HỎI CẦN NGƯỜI TRẢ LỜI</b>\n\n"${question}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời trực tiếp cho web.</i>`,
+                parse_mode: 'HTML'
+            });
+
+            // B. Lưu lại mối liên kết: [ID Tin nhắn Telegram] <--> [Socket ID người dùng]
+            if (teleRes.data && teleRes.data.result && socketId) {
+                const msgId = teleRes.data.result.message_id;
+                pendingRequests.set(msgId, socketId); // Lưu vào bộ nhớ tạm
+            }
+
+            // C. Trả về thông báo cho người dùng trên Web
+            return res.json({ 
+                answer: "Dạ, câu hỏi này hiện chưa có trong dữ liệu Khai Thị.\n\nĐệ đã chuyển câu hỏi trực tiếp đến Ban Quản Trị. Sư huynh vui lòng **giữ nguyên màn hình này**, câu trả lời sẽ hiện ra ngay khi có phản hồi ạ! (Khoảng vài phút)... ⏳" 
+            });
         }
 
+        // =====================================================================
+        // 3. NẾU CÓ DỮ LIỆU -> AI TRẢ LỜI (GIỮ NGUYÊN CODE CŨ CỦA BẠN)
+        // =====================================================================
         let contextString = "";
         documents.forEach((doc, index) => {
-            contextString += `\n[Tài liệu ${index + 1}]\nLink: ${doc.url}\nNội dung: ${doc.content.substring(0, 1500)}...\n`;
+            contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
         });
 
-        const safetySettings = [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-        ];
+        const systemPrompt = `
+        Bạn là Phụng Sự Viên Ảo.
+        Câu hỏi gốc: "${fullQuestion}"
+        Từ khóa trọng tâm: "${searchKeywords}"
+        Dữ liệu tham khảo: ${contextString}
+        Yêu cầu: Trả lời câu hỏi dựa trên bài viết khớp nhất với từ khóa. Cuối câu trả lời DÁN LINK GỐC.
+        `;
 
-        // --- BƯỚC 1: PROMPT GỐC (Đã thêm lệnh CẤM dấu ngoặc) ---
-        const promptGoc = `Bạn là một chuyên gia tra cứu Phật Pháp.
+        const startIndex = getRandomStartIndex();
+        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
         
-        NHIỆM VỤ CỦA BẠN:
-        1. PHÂN TÍCH Ý ĐỊNH: Đọc câu hỏi của Sư huynh, xác định "Nỗi lo" hoặc "Vấn đề tâm linh" cốt lõi là gì (Ví dụ: Hỏi về "mở quán ăn" -> Ý định là lo về "nghiệp sát sinh").
-        2. QUÉT DỮ LIỆU: Đọc "VĂN BẢN NGUỒN", tìm đoạn văn nào giải quyết đúng cái "Vấn đề tâm linh" đó.
-        3. TRÍCH XUẤT: Copy nguyên văn đoạn đó ra.
+        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
         
-        QUY TẮC BẮT BUỘC (TUÂN THỦ 100%):
-        1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN".
-        2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-),KHÔNG chào hỏi, KHÔNG mở bài, KHÔNG kết luận. (Chỉ liệt kê nội dung).
-        3. CẤM TUYỆT ĐỐI: Không được sử dụng dấu ngoặc vuông [ hoặc ] trong câu trả lời.
-        4. TRÍCH DẪN LINK: Cuối mỗi ý quan trọng, xuống dòng và ghi: https://...
+        // (Tùy chọn) Xóa ngoặc vuông link nếu muốn sạch sẽ
+        aiResponse = aiResponse.replace(/[\[\]]/g, "");
 
-        VÍ DỤ TƯ DUY (MẪU):
-        - Câu hỏi: "quên chấm nnn sau đó lỡ đốt rồi có dùng được không?"
-        - Phân tích: Người hỏi muốn hỏi ngôi nhà nhỏ quên chưa chấm đủ số chấm đỏ, sau đó lại đốt đi rồi, muốn hỏi ngôi nhà nhỏ đó có tác dụng không.
-        - Tìm trong văn bản: Thấy đoạn nói về "quên chấm đủ số biến kinh đã niệm trên ngôi nhà nhỏ...".
-        - Kết quả: Trích dẫn đoạn "Đã đốt xong kinh văn của Ngôi Nhà Nhỏ nhưng bị thiếu dấu chấm...".
-        
-        --- VĂN BẢN NGUỒN ---
-        ${contextString}
-        --- HẾT VĂN BẢN NGUỒN ---
-        
-        Câu hỏi: ${fullQuestion}
-        Câu trả lời:`;
-
-        console.log("--> Đang thử Prompt Gốc...");
-        let response = await callGeminiWithRetry({
-            contents: [{ parts: [{ text: promptGoc }] }],
-            safetySettings: safetySettings,
-            generationConfig: { temperature: 0.1, maxOutputTokens: 4096 }
-        }, 0);
-
-        let aiResponse = "";
-        let finishReason = "";
-
-        if (response.data && response.data.candidates && response.data.candidates.length > 0) {
-            const candidate = response.data.candidates[0];
-            finishReason = candidate.finishReason;
-            if (candidate.content?.parts?.[0]?.text) {
-                aiResponse = candidate.content.parts[0].text;
-            }
-        }
-
-        // --- BƯỚC 2: CHIẾN THUẬT CỨU NGUY (TRẢ VỀ DANH SÁCH LINK AN TOÀN) ---
-        if (finishReason === "RECITATION" || !aiResponse) {
-            console.log("⚠️ Prompt Gốc bị chặn (Recitation). Chuyển sang chế độ trả Link an toàn...");
-
-            // 1. Câu thông báo cố định bạn yêu cầu
-            const msgSafe = "Do hệ thống AI có giới hạn về bản quyền và truy xuất dữ liệu Quốc Tế . Sư huynh có thể lặp lại câu hỏi vài lần để có được câu trả lời chính xác nhất . Sau đây là một số bài Khai Thị của Đài Trưởng mà đệ tìm được , mong rằng sẽ giúp ích được cho Sư huynh ạ !";
-
-            // 2. Trích xuất danh sách Link từ dữ liệu tìm kiếm (documents)
-            // (Dùng Set để đảm bảo không bị trùng link)
-            const uniqueLinks = [...new Set(documents.map(doc => doc.url))];
-            
-            // 3. Tạo danh sách link (Mỗi link 1 dòng)
-            // Chỉ lấy tối đa 5 link để nhìn cho gọn
-            const listLinkString = uniqueLinks.slice(0, 5).map(url => `Link : ${url}`).join('\n');
-
-            // 4. Gán kết quả (Đây sẽ là nội dung trả về cuối cùng)
-            aiResponse = `${msgSafe}\n\n${listLinkString}`;
-            
-            // Gửi cảnh báo nhẹ về Telegram để admin biết bài này đang bị Google chặn bản quyền
-            if (typeof sendTelegramAlert === 'function') {
-                // Không await để không làm chậm phản hồi người dùng
-                sendTelegramAlert(`⚠️ <b>Recitation Blocked:</b>\nQuestion: ${fullQuestion}\n-> Đã trả về danh sách Link an toàn.`);
-            }
-        }
-
-        // =================================================================================
-        // BƯỚC QUAN TRỌNG NHẤT: BỘ LỌC RÁC CUỐI CÙNG
-        // =================================================================================
-        
-        // 1. Xóa sạch dấu [ và ] ở bất kỳ đâu trong văn bản
-        aiResponse = aiResponse.replace(/[\[\]]/g, ""); 
-        
-        // 2. Định nghĩa câu chào của bạn
-        const fixedIntro = "Kính thưa Sư Huynh ! sau đây là các khai thị của Đài Trưởng Lư đệ có tìm được. Mong rằng các khai thị này sẽ hữu ích cho Sư huynh ạ !\n\n";
-        
-        // =================================================================================
-
-        let finalAnswer = "";
-        if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
-             finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
-        } else {
-            aiResponse = aiResponse.replace(/\*\*Phụng Sự Viên Ảo Trả Lời :\*\*/g, "").trim();
-            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse + "\n\n**Nhắc nhở: Sư huynh kiểm tra thêm tại: https://timkhaithi.pmtl.site **";
-        }
-
-        res.json({ answer: finalAnswer });
+        res.json({ answer: "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse });
 
     } catch (error) {
-        console.error("Error:", error.message);
-        // Báo lỗi Telegram
-        if (typeof sendTelegramAlert === 'function') {
-             await sendTelegramAlert(`❌ LỖI CHAT:\n${error.message}`);
+        console.error("Lỗi Chat Server:", error.message);
+        // BÁO LỖI VỀ TELEGRAM
+        await sendTelegramAlert(`❌ LỖI API CHAT:\nUser: ${req.body.question}\nError: ${error.message}`);
+        res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
+    }
+});
+
+// --- API NHẬN TIN NHẮN TỪ TELEGRAM (WEBHOOK) ---
+app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
+    try {
+        const { message } = req.body;
+        
+        // Kiểm tra xem có phải là tin nhắn TRẢ LỜI (Reply) không
+        if (message && message.reply_to_message) {
+            const originalMsgId = message.reply_to_message.message_id; // ID câu hỏi gốc
+            const adminReply = message.text; // Câu trả lời của bạn
+
+            // Kiểm tra xem câu hỏi gốc có trong danh sách chờ không
+            if (pendingRequests.has(originalMsgId)) {
+                const userSocketId = pendingRequests.get(originalMsgId);
+                
+                // Gửi câu trả lời về NGAY LẬP TỨC cho người dùng qua Socket
+                io.to(userSocketId).emit('admin_reply', adminReply);
+                
+                // Xóa khỏi danh sách chờ
+                pendingRequests.delete(originalMsgId);
+                console.log(`✅ Đã chuyển câu trả lời tới Socket: ${userSocketId}`);
+            }
         }
-        res.status(503).json({ answer: "Lỗi hệ thống." });
+        res.sendStatus(200); // Báo cho Telegram biết là đã nhận được
+    } catch (e) {
+        console.error("Lỗi Webhook:", e);
+        res.sendStatus(500);
     }
 });
 
@@ -668,6 +656,6 @@ app.get('/api/test-telegram', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server đang chạy tại http://localhost:${PORT}`);
+server.listen(PORT, () => {
+    console.log(`Server Socket.io đang chạy tại http://localhost:${PORT}`);
 });
