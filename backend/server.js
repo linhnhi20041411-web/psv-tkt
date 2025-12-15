@@ -260,7 +260,49 @@ app.post('/api/chat', async (req, res) => {
         // 1. Nhận dữ liệu (Thêm socketId để tránh lỗi nếu client có gửi)
         const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
+        
+        // --- TÍNH NĂNG MỚI: NHẮN TIN TRỰC TIẾP (@psv : nội dung) ---
+        if (question.trim().toLowerCase().startsWith("@psv")) {
+            // 1. Tách nội dung sau dấu hai chấm
+            const parts = question.split(':');
+            // Nếu không có nội dung (ví dụ chỉ gõ "@psv")
+            if (parts.length < 2) {
+                return res.json({ answer: "Sư huynh vui lòng nhập nội dung sau dấu hai chấm.\nVí dụ: @psv : Cho mình hỏi việc riêng này với ạ" });
+            }
+            
+            // Lấy phần nội dung và xóa khoảng trắng thừa
+            const msgContent = parts.slice(1).join(':').trim();
+            
+            if (!msgContent) {
+                return res.json({ answer: "Sư huynh chưa nhập nội dung tin nhắn ạ!" });
+            }
 
+            // 2. Gửi ngay lập tức về Telegram
+            try {
+                const safeMsg = escapeHtml(msgContent); // Xử lý ký tự đặc biệt tránh lỗi 400
+                
+                const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
+                    chat_id: process.env.TELEGRAM_CHAT_ID,
+                    text: `📨 <b>TIN NHẮN TRỰC TIẾP TỪ KHÁCH</b>\n\nNội dung: "${safeMsg}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời trực tiếp.</i>`,
+                    parse_mode: 'HTML'
+                });
+
+                // 3. Lưu lại kết nối để Admin trả lời lại được (Quan trọng)
+                if (teleRes.data && teleRes.data.result && socketId) {
+                    const msgId = teleRes.data.result.message_id;
+                    pendingRequests.set(msgId, socketId);
+                    if (!socketToMsgId.has(socketId)) socketToMsgId.set(socketId, []);
+                    socketToMsgId.get(socketId).push(msgId);
+                }
+
+                return res.json({ answer: "✅ Đệ đã chuyển tin nhắn riêng của Sư huynh tới Ban quản trị. Sư huynh vui lòng giữ kết nối và chờ phản hồi nhé! 🙏" });
+
+            } catch (err) {
+                console.error("Lỗi gửi tin nhắn trực tiếp:", err.message);
+                return res.json({ answer: "❌ Lỗi kết nối, không gửi được tin nhắn. Sư huynh thử lại sau nhé." });
+            }
+        }
+        
         // 2. Xử lý câu hỏi
         const fullQuestion = dichVietTat(question);
         
