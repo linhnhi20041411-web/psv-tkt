@@ -10,45 +10,42 @@ require('dotenv').config();
 
 const parser = new Parser();
 const app = express();
-
-// --- KHỞI TẠO SERVER & SOCKET ---
-const server = http.createServer(app); 
-app.use(cors()); // Mở khóa CORS cho mọi nguồn
+// ---> THÊM ĐOẠN KHỞI TẠO SOCKET NÀY:
+const server = http.createServer(app); // Tạo server bọc lấy app
 const io = new Server(server, {
-    cors: { origin: "*" } 
+    cors: { origin: "*" } // Cho phép mọi nguồn kết nối
 });
 
-// Biến lưu trữ tạm
+// Biến lưu trữ tạm: Tin nhắn Telegram ID -> Socket ID người dùng
 const pendingRequests = new Map();
-const socketToMsgId = new Map();
 
+// Lắng nghe kết nối
 io.on('connection', (socket) => {
     console.log('👤 User Connected:', socket.id);
     socket.on('disconnect', () => {
-        if (socketToMsgId.has(socket.id)) {
-            const msgIds = socketToMsgId.get(socket.id);
-            if (msgIds) msgIds.forEach(id => pendingRequests.delete(id));
-            socketToMsgId.delete(socket.id);
-        }
+        // Có thể dọn dẹp pendingRequests nếu cần
     });
 });
-
 const PORT = process.env.PORT || 3001;
-app.use(express.json({ limit: '50mb' }));
 
-// --- CẤU HÌNH ---
+app.use(express.json({ limit: '50mb' }));
+app.use(cors());
+
+// --- 1. CẤU HÌNH ---
 const rawKeys = process.env.GEMINI_API_KEYS || "";
 const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.length > 0);
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_KEY;
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "123456"; 
+
+// CẤU HÌNH TELEGRAM
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || ""; 
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
 
 if (!supabaseUrl || !supabaseKey) console.error("❌ LỖI: Thiếu SUPABASE_URL hoặc SUPABASE_KEY");
 const supabase = createClient(supabaseUrl, supabaseKey);
 
-// --- TỪ ĐIỂN VIẾT TẮT ---
+// --- 2. BỘ TỪ ĐIỂN VIẾT TẮT ---
 const TU_DIEN_VIET_TAT = {
     "pmtl": "Pháp Môn Tâm Linh", "btpp": "Bạch Thoại Phật Pháp", "nnn": "Ngôi nhà nhỏ", "psv": "Phụng Sự Viên", "sh": "Sư Huynh",
     "kbt": "Kinh Bài Tập", "cđb": "Chú Đại Bi", "cdb": "Chú Đại Bi", "tk": "Tâm Kinh", "lpdshv": "Lễ Phật Đại Sám Hối Văn",
@@ -69,120 +66,135 @@ function dichVietTat(text) {
     return processedText;
 }
 
-// --- TIỆN ÍCH ---
+// --- 3. CÁC HÀM TIỆN ÍCH ---
 function getRandomStartIndex() { return Math.floor(Math.random() * apiKeys.length); }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
-
-// Hàm thoát ký tự đặc biệt ĐỂ TRÁNH LỖI 400 TELEGRAM
-function escapeHtml(text) {
-    if (!text) return "";
-    return String(text)
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
-}
 
 async function sendTelegramAlert(message) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>PSV ẢO</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
+        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>PSV ẢO VĂN TƯ TU</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
     } catch (error) { console.error("Telegram Error:", error.message); }
 }
 
 function cleanText(text) {
     if (!text) return "";
-    let clean = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]*>?/gm, '').replace(/&nbsp;/g, ' ');    
+    // Xóa thẻ HTML, thay br/p bằng xuống dòng
+    let clean = text.replace(/<br\s*\/?>/gi, '\n')
+                    .replace(/<\/p>/gi, '\n')
+                    .replace(/<[^>]*>?/gm, '')
+                    .replace(/&nbsp;/g, ' ')
+                    .replace(/\r\n/g, '\n');   
+    // Xóa dòng trống thừa
     return clean.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
 }
 
 function chunkText(text, maxChunkSize = 2000) {
     if (!text) return [];
+    // Tách theo đoạn văn
     const paragraphs = text.split(/\n\s*\n/);
     const chunks = [];
     let currentChunk = "";
+    
     for (const p of paragraphs) {
         const cleanP = p.trim();
         if (!cleanP) continue;
+        
+        // Nếu cộng thêm đoạn này mà vẫn nhỏ hơn maxChunkSize thì gộp vào
         if ((currentChunk.length + cleanP.length) < maxChunkSize) { 
             currentChunk += (currentChunk ? "\n\n" : "") + cleanP; 
         } else { 
+            // Nếu lớn hơn thì đẩy chunk cũ đi, tạo chunk mới
             if (currentChunk.length > 50) chunks.push(currentChunk); 
             currentChunk = cleanP; 
         }
     }
+    // Đẩy nốt chunk cuối cùng
     if (currentChunk.length > 50) chunks.push(currentChunk);
     return chunks;
 }
 
-// --- GỌI GEMINI ---
+// --- 4. GỌI GEMINI (CÓ RETRY & TELEGRAM) ---
 async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     if (keyIndex >= apiKeys.length) {
         if (retryCount < 1) {
+            console.log("🔁 Hết vòng Key, chờ 2s thử lại...");
             await sleep(2000);
             return callGeminiWithRetry(payload, 0, retryCount + 1);
         }
-        await sendTelegramAlert("🆘 HẾT SẠCH API KEY!");
+        const msg = "🆘 HẾT SẠCH API KEY! Hệ thống không thể phản hồi.";
+        console.error(msg);
+        await sendTelegramAlert(msg);
         throw new Error("ALL_KEYS_EXHAUSTED");
     }
+
     const currentKey = apiKeys[keyIndex];
     const model = "gemini-2.5-flash"; 
     const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
+
     try {
         return await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
     } catch (error) {
-        if (error.response && [429, 400, 403, 500, 503].includes(error.response.status)) {
-            console.warn(`⚠️ Key ${keyIndex} lỗi. Đổi Key...`);
-            if (error.response.status === 429) await sleep(1000); 
+        const status = error.response ? error.response.status : 0;
+        if (status === 429 || status === 400 || status === 403 || status >= 500) {
+            console.warn(`⚠️ Key ${keyIndex} lỗi (Mã: ${status}). Đổi Key...`);
+            if (status === 429) await sleep(1000); 
             return callGeminiWithRetry(payload, keyIndex + 1, retryCount);
         }
         throw error;
     }
 }
 
-// --- 6. AI PHÂN TÍCH TỪ KHÓA ---
+// --- HÀM 5: PHÂN TÍCH & CHUẨN HÓA CÂU HỎI (QUAN TRỌNG) ---
 async function aiExtractKeywords(userQuestion) {
+    // Prompt này ép AI phải "hiểu" tình huống chứ không được "bịa" từ khóa
     const prompt = `
-    Nhiệm vụ: Phân tích câu hỏi tìm kiếm dữ liệu Phật giáo.
-    Input: "${userQuestion}"
+    Đóng vai: Bạn là Thư ký quản lý thư viện Khai Thị (Pháp Môn Tâm Linh).
     
-    YÊU CẦU TRẢ VỀ JSON (Không markdown):
-    {
-        "search_query": "Câu hỏi được viết lại ngắn gọn để tìm Vector",
-        "must_have": ["Từ khóa 1", "Từ khóa 2"] 
-    }
+    NHIỆM VỤ:
+    Đọc câu hỏi "tình huống" của người dùng và chuyển đổi nó thành một "Câu hỏi tra cứu" ngắn gọn, dùng đúng thuật ngữ chuyên môn để tìm trong Mục Lục.
 
-    QUY TẮC must_have (TỪ KHÓA BẮT BUỘC):
-    1. Chọn danh từ cụ thể nhất (Ví dụ: "Trẻ em", "Thai phụ", "Ăn mặn").
-    2. Chọn tên kinh cụ thể (Ví dụ: "Lễ Phật Đại Sám Hối Văn", "Chú Đại Bi").
-    3. KHÔNG chọn từ chung chung (như: niệm, tụng, là gì, sao, thế nào).
-    4. Nếu không có từ khóa đặc biệt, để mảng rỗng [].
+    INPUT CỦA NGƯỜI DÙNG: "${userQuestion}"
 
-    VÍ DỤ:
-    - In: "Trẻ em niệm lpdshv cần chú ý gì"
-    - Out: {"search_query": "lưu ý trẻ em tụng Lễ Phật Đại Sám Hối Văn", "must_have": ["trẻ em", "Lễ Phật Đại Sám Hối Văn"]}
+    QUY TRÌNH TƯ DUY (BẮT BUỘC):
+    1. Xác định Hành Động/Sự Cố (Ví dụ: Chấm thiếu, viết sai họ tên, làm rách, đốt nhầm...).
+    2. Xác định Đối Tượng (Ví dụ: Ngôi nhà nhỏ, bài Chú Đại Bi, Lư hương...).
+    3. Ghép lại thành câu hỏi dạng: "Quy định về..." hoặc "Cách xử lý khi...".
+
+    VÍ DỤ MẪU (Học theo cách tư duy này):
+    - User: "đệ quên chấm đủ số biến kinh đã niệm lên nnn, sau đó đệ lại đốt đi rồi, bây giờ đệ phải làm thế nào ?"
+    -> Output: Cách xử lý khi lỡ hóa Ngôi nhà nhỏ chưa chấm đủ kinh
+    
+    - User: "mình lỡ làm rớt tờ nnn xuống đất bị bẩn thì có dùng được không"
+    -> Output: Quy định về Ngôi nhà nhỏ bị bẩn hoặc rơi xuống đất
+    
+    - User: "hôm nay lỡ ăn mặn rồi có được tụng kinh không"
+    -> Output: Quy định về việc tụng kinh sau khi ăn đồ mặn
+
+    YÊU CẦU ĐẦU RA:
+    Chỉ trả về duy nhất câu hỏi đã chuẩn hóa. Không giải thích gì thêm.
     `;
-
+    
     try {
-        const startIndex = getRandomStartIndex();
-        const response = await callGeminiWithRetry({ 
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: "application/json" } 
-        }, startIndex);
+        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, getRandomStartIndex());
+        let refinedQuery = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
         
-        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        return JSON.parse(text); 
-    } catch (e) {
-        console.error("Lỗi AI Extract:", e.message);
-        return { search_query: userQuestion, must_have: [] };
+        // Làm sạch kết quả
+        refinedQuery = refinedQuery.replace(/\n/g, " ").replace(/["']/g, "").replace(/^Output:\s*/i, "");
+        
+        console.log(`🧠 User hỏi: "${userQuestion}"`);
+        console.log(`💡 AI hiểu là: "${refinedQuery}"`); // Xem log để kiểm tra độ thông minh
+        
+        return refinedQuery;
+    } catch (e) { 
+        console.error("Lỗi phân tích câu hỏi:", e.message);
+        return userQuestion; // Nếu lỗi thì dùng tạm câu gốc
     }
 }
 
-// --- EMBEDDING ---
 async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
-    if (retryCount >= apiKeys.length) throw new Error("Hết Key Embedding.");
+    if (retryCount >= apiKeys.length) { await sendTelegramAlert("Hết key embedding"); throw new Error("Hết Key Embedding."); }
     const currentIndex = keyIndex % apiKeys.length;
     try {
         const genAI = new GoogleGenerativeAI(apiKeys[currentIndex]);
@@ -195,62 +207,62 @@ async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- 7. TÌM KIẾM & SÀNG LỌC (RERANKING LOGIC) ---
-async function searchSupabaseContext(aiAnalysis) {
+// --- 5. HÀM TÌM KIẾM THÔNG MINH (TITLE PRIORITY + VECTOR) ---
+async function searchSupabaseContext(query) {
     try {
-        const { search_query, must_have } = aiAnalysis;
-        console.log(`🔎 Tìm: "${search_query}" | Bắt buộc có: [${must_have.join(', ')}]`);
+        console.log(`🔎 Đang tìm kiếm: "${query}"`);
+        
+        // --- CHIẾN THUẬT 1: TÌM TRONG TIÊU ĐỀ (TEXT SEARCH) ---
+        // Ưu tiên tuyệt đối các bài có tiêu đề khớp với từ khóa
+        // Ví dụ: query="mở nhà hàng" -> Khớp ngay bài "Vấn đề mở nhà hàng chay"
+        const { data: titleMatches, error: titleError } = await supabase
+            .from('vn_buddhism_content')
+            .select('*')
+            // .textSearch('fts', `'${query}'`, { config: 'english', type: 'websearch' }) // <--- Comment dòng này lại hoặc xóa đi
+            .ilike('content', `%Tiêu đề: %${query}%`) // Chỉ giữ lại dòng này là đủ an toàn
+            .limit(5);
 
-        // 1. TẠO VECTOR
+        // --- CHIẾN THUẬT 2: TÌM THEO VECTOR (SEMANTIC SEARCH) ---
         const startIndex = getRandomStartIndex();
-        const queryVector = await callEmbeddingWithRetry(search_query, startIndex);
+        const queryVector = await callEmbeddingWithRetry(query, startIndex);
 
-        // 2. GỌI DATABASE (Lấy 50 bài)
-        const { data: rawDocs, error } = await supabase.rpc('hybrid_search', {
-            query_text: search_query, 
-            query_embedding: queryVector, 
-            match_count: 50, 
+        const { data: vectorMatches, error: vectorError } = await supabase.rpc('hybrid_search', {
+            query_text: query,
+            query_embedding: queryVector,
+            match_count: 30, // Lấy 30 bài liên quan
             rrf_k: 60
         });
 
-        if (error) throw error;
-        if (!rawDocs || rawDocs.length === 0) return null;
+        if (vectorError) throw vectorError;
 
-        // 3. BỘ LỌC KHỬ RÁC
-        let filteredDocs = rawDocs.filter(doc => {
-            const contentLower = (doc.content + " " + (doc.metadata?.title || "")).toLowerCase();
-            const hasAllKeywords = must_have.every(kw => contentLower.includes(kw.toLowerCase()));
-            return hasAllKeywords;
-        });
+        // --- GỘP KẾT QUẢ (MERGE & DEDUPLICATE) ---
+        // Nguyên tắc: Bài khớp Tiêu đề (Chiến thuật 1) phải đứng đầu danh sách
+        
+        const allDocs = [];
+        const seenUrls = new Set();
 
-        console.log(`🧹 Lọc rác: Tìm thấy ${rawDocs.length} -> Giữ lại ${filteredDocs.length} bài khớp từ khóa.`);
-
-        // 4. FALLBACK
-        if (filteredDocs.length === 0 && must_have.length > 0) {
-            console.log("⚠️ Lọc kỹ quá mất hết bài, thử nới lỏng...");
-            filteredDocs = rawDocs.filter(doc => {
-                const contentLower = (doc.content + " " + (doc.metadata?.title || "")).toLowerCase();
-                return contentLower.includes(must_have[0].toLowerCase());
+        // 1. Đưa kết quả khớp Tiêu đề vào trước
+        if (titleMatches && titleMatches.length > 0) {
+            console.log(`✅ Tìm thấy ${titleMatches.length} bài khớp tiêu đề.`);
+            titleMatches.forEach(doc => {
+                if (!seenUrls.has(doc.url)) {
+                    seenUrls.add(doc.url);
+                    allDocs.push(doc);
+                }
             });
         }
 
-        if (filteredDocs.length === 0) {
-            filteredDocs = rawDocs.slice(0, 3);
+        // 2. Đưa kết quả Vector vào sau
+        if (vectorMatches && vectorMatches.length > 0) {
+            vectorMatches.forEach(doc => {
+                if (!seenUrls.has(doc.url)) {
+                    seenUrls.add(doc.url);
+                    allDocs.push(doc);
+                }
+            });
         }
 
-        // 5. TRẢ VỀ TOP 5
-        const uniqueDocs = [];
-        const seenUrls = new Set();
-        
-        for (const doc of filteredDocs) {
-            if (!seenUrls.has(doc.url)) {
-                seenUrls.add(doc.url);
-                uniqueDocs.push(doc);
-                if (uniqueDocs.length >= 5) break; 
-            }
-        }
-
-        return uniqueDocs.length > 0 ? uniqueDocs : null;
+        return allDocs.length > 0 ? allDocs : null;
 
     } catch (error) {
         console.error("Lỗi tìm kiếm:", error.message);
@@ -258,139 +270,132 @@ async function searchSupabaseContext(aiAnalysis) {
     }
 }
 
-// --- 8. API CHAT (BẢN FIX LỖI 400 BAD REQUEST) ---
+// --- 6. API CHAT (BẢN FINAL: SẠCH DẤU NGOẶC + LINK TRẦN + BÁO LỖI) ---
 app.post('/api/chat', async (req, res) => {
     try {
+        // 1. NHẬN THÊM socketId TỪ CLIENT
         const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
         const fullQuestion = dichVietTat(question);
-        const aiAnalysis = await aiExtractKeywords(fullQuestion);
+        const searchKeywords = await aiExtractKeywords(fullQuestion);
         
-        // Tìm kiếm với bộ lọc
-        const documents = await searchSupabaseContext(aiAnalysis);
+        console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
 
-        const HEADER_MSG = "Đệ chào Sư huynh ! sau đây là tất cả các kết quả tìm kiếm đệ tìm được trong thư viện khai thị hiện tại . Mong rằng các kết quả sau đây sẽ mang lại lợi ích tới cho Sư huynh ạ !\n\n";
-        const FOOTER_MSG = "\n\nSư huynh có thể tìm thêm các khai thị của Sư Phụ tại địa chỉ : https://tkt.pmtl.site/";
+        const documents = await searchSupabaseContext(searchKeywords);
 
-        let needHumanSupport = false;
-        let aiResponse = "";
-
+        // =====================================================================
+        // 2. LOGIC MỚI: KHÔNG TÌM THẤY -> CHUYỂN SANG TELEGRAM
+        // =====================================================================
         if (!documents || documents.length === 0) {
-            needHumanSupport = true;
-        } else {
-            // Chuẩn bị dữ liệu
-            let contextString = "";
-            documents.forEach((doc, index) => {
-                contextString += `--- Bài #${index + 1} ---\nLink Gốc: ${doc.url}\nNội dung: ${doc.content.substring(0, 1500)}\n`;
-            });
+            console.log("⚠️ Không có dữ liệu -> Chuyển hướng sang Telegram...");
 
-            // --- PROMPT MỚI: QUYẾT LIỆT HƠN ---
-            const systemPrompt = `
-            NHIỆM VỤ: Trích xuất thông tin trả lời cho câu hỏi: "${fullQuestion}".
-            
-            DỮ LIỆU THAM KHẢO (Đã được lọc là có chứa từ khóa liên quan):
-            ${contextString}
-
-            YÊU CẦU:
-            1. Trích xuất tất cả các ý liên quan đến câu hỏi trong dữ liệu trên.
-            2. Trình bày dạng gạch đầu dòng (-).
-            3. Dưới mỗi ý PHẢI DÁN link bài gốc.
-            4. KHÔNG chào hỏi, KHÔNG kết luận.
-            5. Nếu dữ liệu thực sự hoàn toàn không liên quan (ví dụ nói về chủ đề khác hẳn), mới được trả về: "NO_INFO".
-            
-            Mẫu:
-            - Nội dung A...
-            Link: [URL]
-            `;
-
-            const startIndex = getRandomStartIndex();
-            const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
-            aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_INFO";
-            
-            if (aiResponse.includes("NO_INFO")) needHumanSupport = true;
-        }
-
-        // --- XỬ LÝ KẾT QUẢ ---
-        if (needHumanSupport) {
-            console.log("⚠️ Không tìm thấy -> Chuyển Telegram.");
-
-            // FIX LỖI 400 Ở ĐÂY: Xử lý ký tự đặc biệt thật kỹ
-            const safeUserQ = escapeHtml(question);
-
+            // A. Gửi tin nhắn báo động vào nhóm Telegram
             const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
                 chat_id: process.env.TELEGRAM_CHAT_ID,
-                // Đã bỏ phần JSON phức tạp, chỉ gửi câu hỏi để tránh lỗi định dạng
-                text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\n\nUser: ${safeUserQ}\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
+                text: `❓ <b>CÂU HỎI CẦN NGƯỜI TRẢ LỜI</b>\n\n"${question}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời trực tiếp cho web.</i>`,
                 parse_mode: 'HTML'
             });
 
+            // B. Lưu lại mối liên kết: [ID Tin nhắn Telegram] <--> [Socket ID người dùng]
             if (teleRes.data && teleRes.data.result && socketId) {
                 const msgId = teleRes.data.result.message_id;
-                pendingRequests.set(msgId, socketId);
-                if (!socketToMsgId.has(socketId)) socketToMsgId.set(socketId, []);
-                socketToMsgId.get(socketId).push(msgId);
+                pendingRequests.set(msgId, socketId); // Lưu vào bộ nhớ tạm
             }
 
+            // C. Trả về thông báo cho người dùng trên Web
             return res.json({ 
-                answer: "Đệ đang chuyển câu hỏi của Sư huynh cho các PSV khác hỗ trợ, mong Sư huynh chờ trong giây lát nhé ! 🙏" 
+                answer: "Dạ, câu hỏi này hiện chưa có trong dữ liệu Khai Thị.\n\nĐệ đã chuyển câu hỏi trực tiếp đến Ban Quản Trị. Sư huynh vui lòng **giữ nguyên màn hình này**, câu trả lời sẽ hiện ra ngay khi có phản hồi ạ! (Khoảng vài phút)... ⏳" 
             });
         }
 
-        let cleanBody = aiResponse.replace(/^Output:\s*/i, "").replace(/```/g, "").trim();
-        res.json({ answer: HEADER_MSG + cleanBody + FOOTER_MSG });
+        // =====================================================================
+        // 3. NẾU CÓ DỮ LIỆU -> AI TRẢ LỜI (GIỮ NGUYÊN CODE CŨ CỦA BẠN)
+        // =====================================================================
+        let contextString = "";
+        documents.forEach((doc, index) => {
+            contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
+        });
+
+        const systemPrompt = `
+        Bạn là Phụng Sự Viên Ảo.
+        Câu hỏi gốc: "${fullQuestion}"
+        Từ khóa trọng tâm: "${searchKeywords}"
+        Dữ liệu tham khảo: ${contextString}
+        Yêu cầu: Trả lời câu hỏi dựa trên bài viết khớp nhất với từ khóa. Cuối câu trả lời DÁN LINK GỐC.
+        `;
+
+        const startIndex = getRandomStartIndex();
+        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
+        
+        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
+        
+        // (Tùy chọn) Xóa ngoặc vuông link nếu muốn sạch sẽ
+        aiResponse = aiResponse.replace(/[\[\]]/g, "");
+
+        res.json({ answer: "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse });
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
-        // Tạm thời tắt gửi lỗi Telegram ở đây để tránh lặp vô tận nếu chính Telegram bị lỗi 400
+        // BÁO LỖI VỀ TELEGRAM
+        await sendTelegramAlert(`❌ LỖI API CHAT:\nUser: ${req.body.question}\nError: ${error.message}`);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
-// --- API WEBHOOK TELEGRAM ---
+// --- API NHẬN TIN NHẮN TỪ TELEGRAM (WEBHOOK) ---
 app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
     try {
         const { message } = req.body;
+        
+        // Kiểm tra xem có phải là tin nhắn TRẢ LỜI (Reply) không
         if (message && message.reply_to_message) {
-            const originalMsgId = message.reply_to_message.message_id; 
+            const originalMsgId = message.reply_to_message.message_id; // ID câu hỏi gốc
+            const adminReply = message.text; // Câu trả lời của bạn
+
+            // Kiểm tra xem câu hỏi gốc có trong danh sách chờ không
             if (pendingRequests.has(originalMsgId)) {
                 const userSocketId = pendingRequests.get(originalMsgId);
                 
-                if (message.photo) {
-                    try {
-                        const fileId = message.photo[message.photo.length - 1].file_id;
-                        const getFileUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/getFile?file_id=${fileId}`;
-                        const fileInfoRes = await axios.get(getFileUrl);
-                        const downloadUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_TOKEN}/${fileInfoRes.data.result.file_path}`;
-                        const imageRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
-                        const base64Image = Buffer.from(imageRes.data, 'binary').toString('base64');
-                        
-                        io.to(userSocketId).emit('admin_reply_image', `data:image/jpeg;base64,${base64Image}`);
-                        if (message.caption) io.to(userSocketId).emit('admin_reply', message.caption);
-                    } catch (e) { io.to(userSocketId).emit('admin_reply', "[Lỗi tải ảnh]"); }
-                } else if (message.text) {
-                    io.to(userSocketId).emit('admin_reply', message.text);
-                }
+                // Gửi câu trả lời về NGAY LẬP TỨC cho người dùng qua Socket
+                io.to(userSocketId).emit('admin_reply', adminReply);
+                
+                // Xóa khỏi danh sách chờ
+                pendingRequests.delete(originalMsgId);
+                console.log(`✅ Đã chuyển câu trả lời tới Socket: ${userSocketId}`);
             }
         }
-        res.sendStatus(200); 
-    } catch (e) { console.error(e); res.sendStatus(500); }
+        res.sendStatus(200); // Báo cho Telegram biết là đã nhận được
+    } catch (e) {
+        console.error("Lỗi Webhook:", e);
+        res.sendStatus(500);
+    }
 });
 
-// --- CÁC API ADMIN (GIỮ NGUYÊN) ---
+// --- CÁC API ADMIN (CÓ BÁO LỖI TELEGRAM) ---
 
+// API SYNC
 app.post('/api/admin/sync-blogger', async (req, res) => {
     const { password, blogUrl } = req.body;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8'); res.setHeader('Transfer-Encoding', 'chunked');
     if (password !== ADMIN_PASSWORD) { res.write("❌ Sai mật khẩu!\n"); return res.end(); }
+    
     try {
         const cleanBlogUrl = blogUrl.replace(/\/$/, "");
-        const feed = await parser.parseURL(`${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`);
+        const rssUrl = `${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`;
+        res.write(`📡 Kết nối RSS: ${rssUrl}\n`);
+        
+        const feed = await parser.parseURL(rssUrl);
         res.write(`✅ Tìm thấy ${feed.items.length} bài.\n`);
+        
+        let errCount = 0;
         for (const post of feed.items) {
+            // ... (Logic cũ)
             const { count } = await supabase.from('vn_buddhism_content').select('*', { count: 'exact', head: true }).eq('url', post.link);
             if (count > 0) continue;
-            const chunks = chunkText(cleanText(post.content || post['content:encoded'] || ""));
+            const cleanContent = cleanText(post.content || post['content:encoded'] || "");
+            if (cleanContent.length < 50) continue;
+            const chunks = chunkText(cleanContent);
             res.write(`⚙️ Nạp: ${post.title.substring(0,30)}...\n`);
             for (const chunk of chunks) {
                 try {
@@ -398,14 +403,23 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
                     await supabase.from('vn_buddhism_content').insert({
                         content: `Tiêu đề: ${post.title}\nNội dung: ${chunk}`, embedding, url: post.link, original_id: 0, metadata: { title: post.title, type: 'rss_auto' }
                     });
-                } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); }
+                } catch (e) { 
+                    res.write(`❌ Lỗi: ${e.message}\n`); 
+                    errCount++;
+                }
             }
             await sleep(300);
         }
+        if (errCount > 5) await sendTelegramAlert(`⚠️ Cảnh báo Sync Blogger: Có ${errCount} lỗi xảy ra trong quá trình nạp.`);
         res.write(`\n🎉 HOÀN TẤT!\n`); res.end();
-    } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); res.end(); }
+    } catch (e) { 
+        res.write(`❌ Lỗi: ${e.message}\n`); 
+        await sendTelegramAlert(`❌ LỖI SYNC BLOGGER:\n${e.message}`);
+        res.end(); 
+    }
 });
 
+// API MANUAL ADD
 app.post('/api/admin/manual-add', async (req, res) => {
     const { password, url, title, content } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
@@ -414,105 +428,232 @@ app.post('/api/admin/manual-add', async (req, res) => {
         const chunks = chunkText(cleanText(content));
         for (const chunk of chunks) {
             const embedding = await callEmbeddingWithRetry(`Tiêu đề: ${title}\nNội dung: ${chunk}`, getRandomStartIndex());
-            await supabase.from('vn_buddhism_content').insert({ content: `Tiêu đề: ${title}\nNội dung: ${chunk}`, embedding, url, original_id: 0, metadata: { title, type: 'manual' } });
+            await supabase.from('vn_buddhism_content').insert({
+                content: `Tiêu đề: ${title}\nNội dung: ${chunk}`, embedding, url, original_id: 0, metadata: { title, type: 'manual' }
+            });
             await sleep(300);
         }
-        res.json({ message: "Thành công!" });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        res.json({ message: "Thành công!", logs: ["Đã lưu xong."] });
+    } catch (e) { 
+        await sendTelegramAlert(`❌ Lỗi Manual Add (${title}):\n${e.message}`);
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
-app.post('/api/admin/delete-post', async (req, res) => {
-    const { password, id, url } = req.body; 
-    if (!id && !url) return res.status(400).json({ error: "Thiếu ID hoặc URL!" });
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
-    try {
-        let query = supabase.from('vn_buddhism_content').delete();
-        if (id) query = query.eq('id', id); else if (url) query = query.eq('url', url);
-        await query;
-        res.json({ success: true, message: `Đã xóa!` });
-    } catch (e) { res.status(500).json({ error: e.message }); }
-});
-
-app.post('/api/admin/remove-duplicates', async (req, res) => {
-    const { password } = req.body;
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8'); res.setHeader('Transfer-Encoding', 'chunked');
-    try {
-        res.write("🔍 Đang quét...\n");
-        let allData = [], from = 0, keep = true;
-        while (keep) {
-            const { data } = await supabase.from('vn_buddhism_content').select('id, url, content').range(from, from + 999);
-            if (!data || data.length === 0) keep = false;
-            else { allData = allData.concat(data); from += 1000; res.write(`... Tải ${allData.length} dòng\n`); }
-        }
-        const seen = new Set(), dupIds = [];
-        for (const item of allData) {
-            const sig = `${item.url}|||${item.content ? item.content.substring(0, 150).replace(/\s+/g, '').toLowerCase() : ""}`;
-            if (seen.has(sig)) dupIds.push(item.id); else seen.add(sig);
-        }
-        if (dupIds.length === 0) { res.write("✅ Sạch sẽ!\n"); return res.end(); }
-        res.write(`🗑️ Xóa ${dupIds.length} bài trùng...\n`);
-        for (let i = 0; i < dupIds.length; i += 100) {
-            await supabase.from('vn_buddhism_content').delete().in('id', dupIds.slice(i, i + 100));
-        }
-        res.write(`🎉 Xong!\n`); res.end();
-    } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); res.end(); }
-});
-
+// API CHECK BATCH (Có phát hiện Soft 404)
 app.post('/api/admin/check-batch', async (req, res) => {
     const { password, urls } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+    
+    const results = { checked: 0, deleted: 0, errors: 0, logs: [] };
+    const BLOGGER_ERROR_TEXT = "Rất tiếc, trang bạn đang tìm trong blog này không tồn tại";
+    
     try {
-        let deleted = 0;
         for (const url of urls) {
             try {
-                const r = await axios.get(url, { timeout: 8000, validateStatus: s => s < 500 });
-                if (r.status === 404 || (typeof r.data === 'string' && r.data.includes("không tồn tại"))) {
-                    await supabase.from('vn_buddhism_content').delete().eq('url', url); deleted++;
-                }
-            } catch (e) {}
+                const response = await axios.get(url, { timeout: 8000, validateStatus: s => s < 500 });
+                let isDead = response.status === 404;
+                if (response.status === 200 && typeof response.data === 'string' && response.data.includes(BLOGGER_ERROR_TEXT)) isDead = true;
+
+                if (isDead) {
+                    const { error } = await supabase.from('vn_buddhism_content').delete().eq('url', url);
+                    if (!error) { results.deleted++; results.logs.push(`🗑️ Đã xóa: ${url}`); } else results.errors++;
+                } else results.checked++;
+            } catch (err) { results.errors++; }
             await sleep(100);
         }
-        res.json({ checked: urls.length, deleted });
-    } catch (e) { res.status(500).json({ error: e.message }); }
+        res.json(results);
+    } catch (e) { 
+        await sendTelegramAlert(`❌ Lỗi Check Batch:\n${e.message}`);
+        res.status(500).json({ error: e.message }); 
+    }
 });
 
+// API Get All Urls & Check Latest (Giữ nguyên, không cần báo lỗi Telegram cho các API đọc dữ liệu đơn giản này)
 app.post('/api/admin/get-all-urls', async (req, res) => {
     const { password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
     try {
-        let allUrls = [], from = 0, keep = true;
-        while (keep) {
-            const { data } = await supabase.from('vn_buddhism_content').select('url').range(from, from + 999);
-            if (data.length > 0) { allUrls = allUrls.concat(data.map(i => i.url)); from += 1000; } else keep = false;
+        let allUrls = [], from = 0, step = 999, keepGoing = true;
+        while (keepGoing) {
+            const { data, error } = await supabase.from('vn_buddhism_content').select('url').range(from, from + step);
+            if (error) throw error;
+            if (data.length > 0) { allUrls = allUrls.concat(data.map(i => i.url)); from += step + 1; } else { keepGoing = false; }
         }
         res.json({ success: true, urls: [...new Set(allUrls)] });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/admin/search-posts', async (req, res) => {
-    const { password, keyword } = req.body;
-    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
-    const { data } = await supabase.from('vn_buddhism_content').select('id, url, content, metadata').or(`url.ilike.%${keyword}%, content.ilike.%${keyword}%`).limit(20);
-    res.json({ success: true, data });
-});
-
-app.post('/api/admin/login', (req, res) => {
-    if (req.body.password === ADMIN_PASSWORD) res.json({ success: true }); else res.status(403).json({ error: "Sai mật khẩu!" });
-});
-
-app.post('/api/admin/update-post', async (req, res) => {
-    const { password, id, content, title } = req.body;
+app.post('/api/admin/check-latest', async (req, res) => {
+    const { password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
     try {
-        const embedding = await callEmbeddingWithRetry(`Tiêu đề: ${title}\nNội dung: ${content}`, getRandomStartIndex());
-        await supabase.from('vn_buddhism_content').update({ content: `Tiêu đề: ${title}\nNội dung: ${content}`, embedding, metadata: { title, type: 'edited' } }).eq('id', id);
-        res.json({ success: true });
+        const { data } = await supabase.from('vn_buddhism_content').select('id, url, metadata, created_at').order('id', { ascending: false }).limit(20);
+        const unique = []; const seen = new Set();
+        data.forEach(i => { if (!seen.has(i.url)) { seen.add(i.url); unique.push(i); } });
+        res.json({ success: true, data: unique });
     } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// --- API KIỂM TRA MẬT KHẨU (LOGIN) ---
+app.post('/api/admin/login', (req, res) => {
+    const { password } = req.body;
+    if (password === ADMIN_PASSWORD) {
+        res.json({ success: true });
+    } else {
+        res.status(403).json({ error: "Sai mật khẩu!" });
+    }
+});
+
+// --- API TÌM KIẾM BÀI VIẾT (ĐỂ SỬA) ---
+app.post('/api/admin/search-posts', async (req, res) => {
+    const { password, keyword } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+
+    try {
+        // Tìm theo URL hoặc Tiêu đề (trong metadata)
+        const { data, error } = await supabase
+            .from('vn_buddhism_content')
+            .select('id, url, content, metadata, created_at')
+            .or(`url.ilike.%${keyword}%, content.ilike.%${keyword}%`)
+            .limit(20); // Chỉ lấy 20 kết quả đầu để đỡ lag
+
+        if (error) throw error;
+        res.json({ success: true, data });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- API CẬP NHẬT BÀI VIẾT (SỬA & RE-EMBEDDING) ---
+app.post('/api/admin/update-post', async (req, res) => {
+    const { password, id, content, title } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+
+    try {
+        // 1. Tính toán lại Vector cho nội dung mới (QUAN TRỌNG)
+        // Nếu sửa nội dung mà không sửa vector, AI sẽ tìm kiếm dựa trên nội dung cũ -> Sai lệch.
+        const fullText = `Tiêu đề: ${title}\nNội dung: ${content}`;
+        const embedding = await callEmbeddingWithRetry(fullText, getRandomStartIndex());
+
+        // 2. Cập nhật vào Supabase
+        const { error } = await supabase
+            .from('vn_buddhism_content')
+            .update({ 
+                content: fullText,
+                embedding: embedding,
+                metadata: { title: title, type: 'edited' } // Đánh dấu là đã sửa
+            })
+            .eq('id', id);
+
+        if (error) throw error;
+        res.json({ success: true, message: "Đã cập nhật nội dung và vector thành công!" });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// --- API XÓA BÀI TRÙNG LẶP (DEDUPLICATE - PHIÊN BẢN QUÉT FULL DATA) ---
+app.post('/api/admin/remove-duplicates', async (req, res) => {
+    const { password } = req.body;
+    if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
+
+    // Stream log về client
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    res.setHeader('Transfer-Encoding', 'chunked');
+
+    try {
+        res.write("🔍 Đang tải toàn bộ dữ liệu (Chế độ Phân trang)...\n");
+
+        let allData = [];
+        let from = 0;
+        const pageSize = 1000; // Mỗi lần tải 1000 bài
+        let keepFetching = true;
+
+        // --- VÒNG LẶP TẢI DỮ LIỆU ---
+        while (keepFetching) {
+            const { data, error } = await supabase
+                .from('vn_buddhism_content')
+                .select('id, url, content')
+                .range(from, from + pageSize - 1); // Lấy từ dòng 'from' đến 'to'
+
+            if (error) throw error;
+
+            if (data.length === 0) {
+                keepFetching = false; // Hết dữ liệu thì dừng
+            } else {
+                allData = allData.concat(data); // Gộp dữ liệu mới vào mảng tổng
+                from += pageSize; // Tăng vị trí bắt đầu cho lần sau
+                res.write(`... Đã tải được: ${allData.length} bản ghi\n`);
+                
+                // Nếu số lượng tải về ít hơn pageSize nghĩa là đã đến trang cuối
+                if (data.length < pageSize) keepFetching = false;
+            }
+        }
+
+        res.write(`📂 TỔNG CỘNG: ${allData.length} bản ghi trong Database.\n`);
+        res.write("⚙️ Đang phân tích tìm bài trùng...\n");
+
+        const seen = new Set();
+        const duplicateIds = [];
+
+        // Duyệt qua từng dòng trong dữ liệu tổng
+        for (const item of allData) {
+            // Tạo "chữ ký" duy nhất: URL + 100 ký tự đầu của Content
+            // Cắt content ngắn gọn để đỡ tốn bộ nhớ
+            const contentSig = item.content ? item.content.substring(0, 100) : "empty";
+            const signature = `${item.url}|||${contentSig}`;
+
+            if (seen.has(signature)) {
+                // Nếu đã thấy chữ ký này rồi -> Đây là bản sao -> Xóa
+                duplicateIds.push(item.id);
+            } else {
+                seen.add(signature);
+            }
+        }
+
+        if (duplicateIds.length === 0) {
+            res.write("✅ Tuyệt vời! Không phát hiện dữ liệu trùng lặp.\n");
+            return res.end();
+        }
+
+        res.write(`⚠️ Phát hiện ${duplicateIds.length} bản ghi trùng lặp.\n`);
+        res.write("🗑️ Đang tiến hành xóa...\n");
+
+        // Chia nhỏ mảng ID để xóa (Supabase giới hạn số lượng trong 1 lệnh xóa)
+        const batchSize = 100;
+        for (let i = 0; i < duplicateIds.length; i += batchSize) {
+            const batch = duplicateIds.slice(i, i + batchSize);
+            const { error: delError } = await supabase
+                .from('vn_buddhism_content')
+                .delete()
+                .in('id', batch);
+            
+            if (delError) {
+                res.write(`❌ Lỗi xóa batch ${i}: ${delError.message}\n`);
+            } else {
+                res.write(`✅ Đã xóa lô ${i + 1} - ${Math.min(i + batchSize, duplicateIds.length)}\n`);
+            }
+        }
+
+        res.write(`🎉 HOÀN TẤT! Đã dọn dẹp sạch sẽ Database.\n`);
+        res.end();
+
+    } catch (e) {
+        console.error("Lỗi:", e);
+        res.write(`❌ Lỗi hệ thống: ${e.message}\n`);
+        res.end();
+    }
+});
+
+// --- API TEST TELEGRAM (Dùng để kiểm tra kết nối) ---
 app.get('/api/test-telegram', async (req, res) => {
-    await sendTelegramAlert("🚀 Test OK"); res.json({ success: true });
+    try {
+        await sendTelegramAlert("🚀 <b>Test thành công!</b>\nServer của Sư huynh đã kết nối được với Telegram.\n\nChúc Sư huynh một ngày an lạc! 🙏");
+        res.json({ success: true, message: "Đã gửi tin nhắn. Sư huynh kiểm tra điện thoại nhé!" });
+    } catch (error) {
+        res.status(500).json({ error: "Lỗi gửi Telegram: " + error.message });
+    }
 });
 
 server.listen(PORT, () => {
