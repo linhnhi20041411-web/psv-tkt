@@ -21,21 +21,13 @@
         .font-title { 
             font-family: 'Playfair Display', serif; 
         }
-        #chat-messages::-webkit-scrollbar { 
-            width: 8px; 
-        }
-        #chat-messages::-webkit-scrollbar-track { 
-            background: #EFEBE9; 
-        }
-        #chat-messages::-webkit-scrollbar-thumb { 
-            background: #A1887F; 
-            border-radius: 4px; 
-        }
-        #chat-messages::-webkit-scrollbar-thumb:hover { 
-            background: #8D6E63; 
-        }
+        #chat-messages::-webkit-scrollbar { width: 8px; }
+        #chat-messages::-webkit-scrollbar-track { background: #EFEBE9; }
+        #chat-messages::-webkit-scrollbar-thumb { background: #A1887F; border-radius: 4px; }
+        #chat-messages::-webkit-scrollbar-thumb:hover { background: #8D6E63; }
+        
         .message-bubble p {
-            font-size: 16px; /* Giảm size chút cho mobile dễ nhìn */
+            font-size: 16px; 
             line-height: 1.6;
             word-break: break-word; 
         }
@@ -47,16 +39,18 @@
             font-weight: 600 !important;
         }
 
-        .message-bubble b, 
-        .message-bubble strong,
-        .font-bold {
-            font-weight: 700 !important;
-        }
+        .message-bubble b, .message-bubble strong, .font-bold { font-weight: 700 !important; }
+        .message-bubble i, .message-bubble em, .italic { font-style: italic !important; }
 
-        .message-bubble i, 
-        .message-bubble em,
-        .italic {
-            font-style: italic !important;
+        /* CSS MỚI CHO ẢNH */
+        .chat-image {
+            max-width: 100%;
+            border-radius: 12px;
+            margin-top: 8px;
+            border: 1px solid rgba(0,0,0,0.1);
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            display: block;
+            cursor: pointer;
         }
 
         /* --- STYLE NÚT ĐỌC BÀI GỐC --- */
@@ -64,8 +58,8 @@
             display: inline-block;
             margin-top: 8px;
             margin-bottom: 4px;
-            background-color: #f59e0b; /* Amber-500 */
-            color: #451a03 !important; /* Nâu Đậm */
+            background-color: #f59e0b; 
+            color: #451a03 !important; 
             padding: 6px 16px;      
             border-radius: 20px;    
             font-size: 13px;        
@@ -107,10 +101,9 @@
 
     <script>
     // ==========================================================
-    // 1. CẤU HÌNH SERVER (Thay link Render của bạn vào đây)
+    // 1. CẤU HÌNH SERVER (PHẢI ĐỂ TRÊN CÙNG)
     // ==========================================================
     const BACKEND_API_URL = "https://psv-tkt.onrender.com"; 
-    // Lưu ý: Không có dấu gạch chéo / ở cuối
 
     const chatMessages = document.getElementById('chat-messages');
     const userInput = document.getElementById('user-input');
@@ -135,30 +128,59 @@
         userInput.disabled = true;
     });
 
-    // Lắng nghe Admin trả lời từ Telegram
+    // Lắng nghe Admin trả lời TEXT
     socket.on("admin_reply", (msg) => {
-        // Phát âm thanh tin nhắn (nếu muốn)
-        // new Audio('sound.mp3').play().catch(e => {}); 
         addMessage("**Ban Quản Trị Trả Lời:**\n\n" + msg, 'bot'); 
+        try { new Audio('https://www.soundjay.com/buttons/sounds/button-3.mp3').play().catch(e=>{}); } catch(e){}
+    });
+
+    // Lắng nghe Admin trả lời ẢNH (MỚI)
+    socket.on("admin_reply_image", (base64Src) => {
+        const messageWrapper = document.createElement('div');
+        messageWrapper.classList.add('message', 'mb-4', 'flex', 'w-full', 'justify-start');
+        
+        const messageBubble = document.createElement('div');
+        // Dùng class text-amber-200 và bg-red-900 cho giống tin nhắn Bot
+        messageBubble.classList.add('message-bubble', 'rounded-xl', 'p-2', 'max-w-xl', 'shadow-md', 'bg-red-900', 'text-amber-200');
+        
+        const imgElement = document.createElement('img');
+        imgElement.src = base64Src;
+        imgElement.classList.add('chat-image');
+        
+        // Click để xem full size
+        imgElement.onclick = () => {
+            const newTab = window.open();
+            newTab.document.body.innerHTML = `<img src="${base64Src}" style="max-width:100%">`;
+        };
+
+        const title = document.createElement('p');
+        title.innerHTML = "<b>Ban Quản Trị gửi ảnh:</b>";
+        title.style.marginBottom = "5px";
+
+        messageBubble.appendChild(title);
+        messageBubble.appendChild(imgElement);
+        messageWrapper.appendChild(messageBubble);
+        
+        chatMessages.appendChild(messageWrapper);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+
+        try { new Audio('https://www.soundjay.com/buttons/sounds/button-3.mp3').play().catch(e=>{}); } catch(e){}
     });
 
     // ==========================================================
     // 3. XỬ LÝ GIAO DIỆN & LOGIC GỬI TIN
     // ==========================================================
 
-    // Fix lỗi chiều cao trên Mobile (iOS Safari)
     const setAppHeight = () => {
         document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
     }
     window.addEventListener('resize', setAppHeight);
     setAppHeight();
 
-    // Chào mừng
     window.addEventListener('load', () => {
         addMessage('Đệ chào Sư huynh ! Sư huynh cứ đặt câu hỏi ạ?', 'bot');
     });
 
-    // Xử lý click link
     chatMessages.addEventListener('click', function(event) {
         const linkElement = event.target.closest('a');
         if (linkElement) {
@@ -166,7 +188,6 @@
         }
     });
 
-    // Hàm xử lý Text & Link (Giữ nguyên logic tốt của bạn)
     function linkifyAndSanitize(text) {
         if (typeof text !== 'string') return '';
         
@@ -174,19 +195,15 @@
         sanitizerDiv.textContent = text;
         let sanitizedText = sanitizerDiv.innerHTML;
 
-        // Hàn gắn link bị gãy do xuống dòng
         sanitizedText = sanitizedText.replace(/([a-zA-Z0-9]-)[\s\n]+([a-zA-Z0-9])/g, "$1$2");
-
-        // Format in đậm, nghiêng
         sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
         sanitizedText = sanitizedText.replace(/(^|\s)_(.*?)_(\s|$)/g, '$1<span class="italic">$2</span>$3');
 
-        // Regex link
         const urlRegex = /https?:\/\/[^\s<"]+/g;
         
         const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
             if (fullString.indexOf(url, offset + url.length) !== -1) {
-                return ""; // Xóa link trùng
+                return ""; 
             }
             let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
             return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">Đọc Thêm</a>`;
@@ -223,7 +240,6 @@
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
-    // --- HÀM GỌI API (ĐÃ SỬA: GỬI KÈM SOCKET ID) ---
     async function callBackendAPI(question) {
         const url = `${BACKEND_API_URL.replace(/\/$/, "")}/api/chat`;
 
@@ -232,7 +248,7 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 question: question,
-                socketId: mySocketId // <--- QUAN TRỌNG: Gửi ID này để nhận tin từ Telegram
+                socketId: mySocketId 
             })
         });
 
@@ -258,7 +274,6 @@
         addMessage(userQuestion, 'user');
         userInput.value = '';
         sendButton.disabled = true;
-        // Hiệu ứng xoay xoay
         sendButton.innerHTML = '<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>';
 
         try {
