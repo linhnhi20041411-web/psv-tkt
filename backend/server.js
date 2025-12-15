@@ -56,8 +56,45 @@ async function sendTelegramAlert(message) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>CẢNH BÁO CHATBOT</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
+        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>PSV ẢO VĂN TƯ TU</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
     } catch (error) { console.error("Telegram Error:", error.message); }
+}
+
+function cleanText(text) {
+    if (!text) return "";
+    // Xóa thẻ HTML, thay br/p bằng xuống dòng
+    let clean = text.replace(/<br\s*\/?>/gi, '\n')
+                    .replace(/<\/p>/gi, '\n')
+                    .replace(/<[^>]*>?/gm, '')
+                    .replace(/&nbsp;/g, ' ')
+                    .replace(/\r\n/g, '\n');   
+    // Xóa dòng trống thừa
+    return clean.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
+}
+
+function chunkText(text, maxChunkSize = 2000) {
+    if (!text) return [];
+    // Tách theo đoạn văn
+    const paragraphs = text.split(/\n\s*\n/);
+    const chunks = [];
+    let currentChunk = "";
+    
+    for (const p of paragraphs) {
+        const cleanP = p.trim();
+        if (!cleanP) continue;
+        
+        // Nếu cộng thêm đoạn này mà vẫn nhỏ hơn maxChunkSize thì gộp vào
+        if ((currentChunk.length + cleanP.length) < maxChunkSize) { 
+            currentChunk += (currentChunk ? "\n\n" : "") + cleanP; 
+        } else { 
+            // Nếu lớn hơn thì đẩy chunk cũ đi, tạo chunk mới
+            if (currentChunk.length > 50) chunks.push(currentChunk); 
+            currentChunk = cleanP; 
+        }
+    }
+    // Đẩy nốt chunk cuối cùng
+    if (currentChunk.length > 50) chunks.push(currentChunk);
+    return chunks;
 }
 
 // --- 4. GỌI GEMINI (CÓ RETRY & TELEGRAM) ---
