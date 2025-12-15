@@ -270,74 +270,96 @@ async function searchSupabaseContext(query) {
     }
 }
 
-// --- 6. API CHAT (BẢN FINAL: SẠCH DẤU NGOẶC + LINK TRẦN + BÁO LỖI) ---
 app.post('/api/chat', async (req, res) => {
     try {
-        // 1. NHẬN THÊM socketId TỪ CLIENT
         const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
         const fullQuestion = dichVietTat(question);
-        const searchKeywords = await aiExtractKeywords(fullQuestion);
         
+        // Bước 1: Tư duy từ khóa (Giữ nguyên)
+        const searchKeywords = await aiExtractKeywords(fullQuestion);
         console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
 
+        // Bước 2: Tìm kiếm dữ liệu
         const documents = await searchSupabaseContext(searchKeywords);
 
-        // =====================================================================
-        // 2. LOGIC MỚI: KHÔNG TÌM THẤY -> CHUYỂN SANG TELEGRAM
-        // =====================================================================
+        // Biến cờ: Xác định xem có cần người hỗ trợ không
+        let needHumanSupport = false;
+        let aiResponse = "";
+
+        // TRƯỜNG HỢP 1: Không tìm thấy bài nào trong Database
         if (!documents || documents.length === 0) {
-            console.log("⚠️ Không có dữ liệu -> Chuyển hướng sang Telegram...");
-
-            // A. Gửi tin nhắn báo động vào nhóm Telegram
-            const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
-                chat_id: process.env.TELEGRAM_CHAT_ID,
-                text: `❓ <b>CÂU HỎI CẦN NGƯỜI TRẢ LỜI</b>\n\n"${question}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời trực tiếp cho web.</i>`,
-                parse_mode: 'HTML'
+            needHumanSupport = true;
+        } else {
+            // TRƯỜNG HỢP 2: Có bài viết, NHƯNG phải kiểm tra xem nội dung có liên quan không
+            let contextString = "";
+            documents.forEach((doc, index) => {
+                contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
             });
 
-            // B. Lưu lại mối liên kết: [ID Tin nhắn Telegram] <--> [Socket ID người dùng]
-            if (teleRes.data && teleRes.data.result && socketId) {
-                const msgId = teleRes.data.result.message_id;
-                pendingRequests.set(msgId, socketId); // Lưu vào bộ nhớ tạm
+            // --- PROMPT "SIẾT CHẶT" ---
+            const systemPrompt = `
+            Bạn là Máy Tra Cứu Thông Tin (Pháp Môn Tâm Linh).
+            
+            DỮ LIỆU THAM KHẢO:
+            ${contextString}
+            
+            CÂU HỎI: "${fullQuestion}"
+            
+            QUY TẮC BẮT BUỘC (TUÂN THỦ 100%):
+            1. Đọc kỹ "DỮ LIỆU THAM KHẢO".
+            2. Nếu dữ liệu KHÔNG chứa câu trả lời cho câu hỏi (hoặc câu hỏi không liên quan đến Phật pháp/Tâm linh như hỏi thời tiết, giá vàng, xổ số...):
+               -> Chỉ trả về đúng duy nhất cụm từ: "NO_INFO"
+            3. Nếu dữ liệu CÓ chứa câu trả lời:
+               -> Trả lời ngắn gọn dựa trên dữ liệu.
+               -> Cuối câu dán Link gốc.
+               -> Không chào hỏi, không thêm lời dẫn thừa.
+            `;
+
+            const startIndex = getRandomStartIndex();
+            const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
+
+            aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_INFO";
+            
+            // Nếu AI trả về "NO_INFO", nghĩa là nó thấy bài viết không liên quan
+            if (aiResponse.includes("NO_INFO")) {
+                needHumanSupport = true;
             }
-
-            // C. Trả về thông báo cho người dùng trên Web
-            return res.json({ 
-                answer: "Dạ, câu hỏi này hiện chưa có trong dữ liệu Khai Thị.\n\nĐệ đã chuyển câu hỏi trực tiếp đến Ban Quản Trị. Sư huynh vui lòng **giữ nguyên màn hình này**, câu trả lời sẽ hiện ra ngay khi có phản hồi ạ! (Khoảng vài phút)... ⏳" 
-            });
         }
 
         // =====================================================================
-        // 3. NẾU CÓ DỮ LIỆU -> AI TRẢ LỜI (GIỮ NGUYÊN CODE CŨ CỦA BẠN)
+        // XỬ LÝ KẾT QUẢ CUỐI CÙNG
         // =====================================================================
-        let contextString = "";
-        documents.forEach((doc, index) => {
-            contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
-        });
-
-        const systemPrompt = `
-        Bạn là Phụng Sự Viên Ảo.
-        Câu hỏi gốc: "${fullQuestion}"
-        Từ khóa trọng tâm: "${searchKeywords}"
-        Dữ liệu tham khảo: ${contextString}
-        Yêu cầu: Trả lời câu hỏi dựa trên bài viết khớp nhất với từ khóa. Cuối câu trả lời DÁN LINK GỐC.
-        `;
-
-        const startIndex = getRandomStartIndex();
-        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
         
-        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
-        
-        // (Tùy chọn) Xóa ngoặc vuông link nếu muốn sạch sẽ
-        aiResponse = aiResponse.replace(/[\[\]]/g, "");
+        if (needHumanSupport) {
+            console.log("⚠️ Câu hỏi không có trong Data hoặc không liên quan -> Chuyển Telegram.");
 
+            // 1. Gửi Telegram
+            const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
+                chat_id: process.env.TELEGRAM_CHAT_ID,
+                text: `❓ <b>CÂU HỎI CẦN HỖ TRỢ</b>\n\n"${question}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời.</i>`,
+                parse_mode: 'HTML'
+            });
+
+            // 2. Lưu Socket ID để chờ Admin trả lời
+            if (teleRes.data && teleRes.data.result && socketId) {
+                const msgId = teleRes.data.result.message_id;
+                pendingRequests.set(msgId, socketId);
+            }
+
+            // 3. Trả về câu thông báo mặc định (Đã sửa chính tả giúp bạn: nát -> lát, huỳnh -> huynh)
+            return res.json({ 
+                answer: "Đệ đang chuyển câu hỏi của Sư huynh cho các PSV khác hỗ trợ, mong Sư huynh chờ trong giây lát nhé ! 🙏" 
+            });
+        }
+
+        // Nếu có câu trả lời từ AI
+        aiResponse = aiResponse.replace(/[\[\]]/g, ""); // Làm sạch dấu ngoặc
         res.json({ answer: "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse });
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
-        // BÁO LỖI VỀ TELEGRAM
         await sendTelegramAlert(`❌ LỖI API CHAT:\nUser: ${req.body.question}\nError: ${error.message}`);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
