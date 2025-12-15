@@ -231,29 +231,27 @@ async function searchSupabaseContext(query) {
     }
 }
 
-// --- 6. API CHAT (KẾT HỢP LOGIC CỦA BẠN VÀO ĐÂY) ---
+// --- 6. API CHAT (BẢN FINAL: SẠCH DẤU NGOẶC + LINK TRẦN + BÁO LỖI) ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { question } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // A. TÌM KIẾM DỮ LIỆU (Giữ nguyên logic Supabase để lấy Context)
+        // A. TÌM KIẾM DỮ LIỆU
         const fullQuestion = dichVietTat(question);
         const searchKeywords = await aiExtractKeywords(fullQuestion);
         console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
         const documents = await searchSupabaseContext(searchKeywords);
 
         if (!documents) {
-            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" });
+            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại: https://timkhaithi.pmtl.site" });
         }
 
-        // Tạo Context String từ Supabase
         let contextString = "";
         documents.forEach((doc, index) => {
             contextString += `\n[Tài liệu ${index + 1}]\nLink: ${doc.url}\nNội dung: ${doc.content.substring(0, 1500)}...\n`;
         });
 
-        // B. GỌI GEMINI (ÁP DỤNG MÃ NGUỒN CỦA BẠN TẠI ĐÂY)
         const safetySettings = [
             { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
             { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -261,17 +259,17 @@ app.post('/api/chat', async (req, res) => {
             { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
         ];
 
-        // --- BƯỚC 1: PROMPT GỐC (Dựa trên code bạn gửi) ---
+        // --- BƯỚC 1: PROMPT GỐC (Đã thêm lệnh CẤM dấu ngoặc) ---
         const promptGoc = `Bạn là một công cụ trích xuất thông tin chính xác.
         Nhiệm vụ: Trả lời câu hỏi dựa trên "VĂN BẢN NGUỒN" bên dưới.
 
-        QUY TẮC BẮT BUỘC:
-        1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN". Không dùng kiến thức ngoài.
-        2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng, ngắn gọn.
-        3. TRÍCH DẪN LINK: Cuối mỗi ý quan trọng, PHẢI kèm theo Link gốc của bài viết đó (Lấy từ phần Link trong văn bản nguồn). 
-           Ví dụ: - Nội dung trả lời [Link gốc]
-        4. XƯNG HÔ: Tự xưng "đệ", gọi người hỏi "Sư huynh".
-        5. KHÔNG TÌM THẤY: Nếu không có tin, nói: "Mời Sư huynh tra cứu thêm tại: https://mucluc.pmtl.site".
+        QUY TẮC BẮT BUỘC (TUÂN THỦ 100%):
+        1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN".
+        2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-).
+        3. CẤM TUYỆT ĐỐI: Không được sử dụng dấu ngoặc vuông [ hoặc ] trong câu trả lời.
+        4. TRÍCH DẪN LINK: Cuối mỗi ý, xuống dòng và ghi link trần theo mẫu:
+           👉 Bài gốc: https://...
+        5. XƯNG HÔ: Tự xưng "đệ", gọi người hỏi "Sư huynh".
 
         --- VĂN BẢN NGUỒN ---
         ${contextString}
@@ -298,23 +296,21 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        // --- BƯỚC 2: CHIẾN THUẬT CỨU NGUY (RECITATION FALLBACK) ---
+        // --- BƯỚC 2: CHIẾN THUẬT CỨU NGUY (RECITATION) ---
         if (finishReason === "RECITATION" || !aiResponse) {
-            console.log("⚠️ Prompt Gốc bị chặn (Recitation). Kích hoạt Prompt Diễn Giải...");
-
+            console.log("⚠️ Recitation Blocked. Dùng Prompt Diễn Giải...");
             const promptDienGiai = `Bạn là trợ lý tu tập.
             NV: Trả lời câu hỏi: "${fullQuestion}" dựa trên văn bản nguồn.
-            VẤN ĐỀ: Việc trích dẫn nguyên văn bị lỗi bản quyền.
+            VẤN ĐỀ: Lỗi bản quyền trích dẫn.
             GIẢI PHÁP:
             1. Đọc hiểu ý chính.
-            2. VIẾT LẠI (Diễn giải) các ý đó dưới dạng gạch đầu dòng, ngôn ngữ súc tích.
-            3. Giữ nguyên thuật ngữ Phật học.
-            4. Vẫn phải kèm Link gốc vào cuối mỗi ý nếu có thể.
+            2. VIẾT LẠI (Diễn giải) ý đó dưới dạng gạch đầu dòng.
+            3. TUYỆT ĐỐI KHÔNG dùng dấu ngoặc vuông [ ].
+            4. Kèm Link gốc (URL trần) ở dòng dưới mỗi ý.
             5. Bắt đầu bằng: "Do hạn chế về bản quyền, đệ xin tóm lược ý chính:".
 
             --- VĂN BẢN NGUỒN ---
-            ${contextString}
-            `;
+            ${contextString}`;
 
             response = await callGeminiWithRetry({
                 contents: [{ parts: [{ text: promptDienGiai }] }],
@@ -325,27 +321,39 @@ app.post('/api/chat', async (req, res) => {
             if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
                 aiResponse = response.data.candidates[0].content.parts[0].text;
             } else {
-                aiResponse = "Nội dung này Google chặn tuyệt đối (Recitation). Sư huynh vui lòng xem trực tiếp trên web ạ.";
-                await sendTelegramAlert(`⚠️ Recitation Blocked 2 lần: ${fullQuestion}`);
+                aiResponse = "Nội dung này Google chặn tuyệt đối. Sư huynh xem trực tiếp trên web ạ.";
             }
         }
 
-        // TRẢ KẾT QUẢ
+        // =================================================================================
+        // BƯỚC QUAN TRỌNG NHẤT: BỘ LỌC RÁC CUỐI CÙNG
+        // =================================================================================
+        
+        // 1. Xóa sạch dấu [ và ] ở bất kỳ đâu trong văn bản
+        aiResponse = aiResponse.replace(/[\[\]]/g, ""); 
+        
+        // 2. Xóa các ký tự đánh dấu Markdown link thừa (nếu có) như (http...)
+        // (Chỉ giữ lại URL trần)
+        
+        // =================================================================================
+
         let finalAnswer = "";
-        if (aiResponse.includes("mucluc.pmtl.site") && aiResponse.length < 150) {
-             finalAnswer = aiResponse;
+        if (aiResponse.includes("mucluc.pmtl.site") || aiResponse.includes("NONE")) {
+             finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
         } else {
-            // Loại bỏ các dòng thừa nếu AI lỡ thêm vào
             aiResponse = aiResponse.replace(/\*\*Phụng Sự Viên Ảo Trả Lời :\*\*/g, "").trim();
-            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse;
+            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse + "\n\n_Nhắc nhở: Sư huynh kiểm tra thêm tại: https://timkhaithi.pmtl.site nhé 🙏_";
         }
 
         res.json({ answer: finalAnswer });
 
     } catch (error) {
-        console.error("Lỗi Chat Server:", error.message);
-        await sendTelegramAlert(`❌ LỖI API CHAT:\n${error.message}`);
-        res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
+        console.error("Error:", error.message);
+        // Báo lỗi Telegram
+        if (typeof sendTelegramAlert === 'function') {
+             await sendTelegramAlert(`❌ LỖI CHAT:\n${error.message}`);
+        }
+        res.status(503).json({ answer: "Lỗi hệ thống." });
     }
 });
 
