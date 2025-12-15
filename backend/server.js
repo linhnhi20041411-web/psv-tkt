@@ -128,28 +128,51 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- 5. AI EXTRACT & EMBEDDING ---
+// --- HÀM 5: PHÂN TÍCH & CHUẨN HÓA CÂU HỎI (QUAN TRỌNG) ---
 async function aiExtractKeywords(userQuestion) {
-    // Prompt này yêu cầu AI đoán các từ khóa liên quan về mặt ý nghĩa (Semantic Keywords)
+    // Prompt này ép AI phải "hiểu" tình huống chứ không được "bịa" từ khóa
     const prompt = `
-    Nhiệm vụ: Phân tích câu hỏi người dùng và đưa ra 3-5 cụm từ khóa tìm kiếm liên quan nhất đến giáo lý/tâm linh.
+    Đóng vai: Bạn là Thư ký quản lý thư viện Khai Thị (Pháp Môn Tâm Linh).
     
-    Quy tắc:
-    1. Giữ lại từ khóa gốc.
-    2. Thêm các từ đồng nghĩa hoặc khái niệm Phật pháp liên quan (Ví dụ: "bệnh ung thư" -> thêm "nghiệp sát sinh", "nghiệp nặng").
-    3. Trả về kết quả ngăn cách bởi dấu phẩy.
+    NHIỆM VỤ:
+    Đọc câu hỏi "tình huống" của người dùng và chuyển đổi nó thành một "Câu hỏi tra cứu" ngắn gọn, dùng đúng thuật ngữ chuyên môn để tìm trong Mục Lục.
+
+    INPUT CỦA NGƯỜI DÙNG: "${userQuestion}"
+
+    QUY TRÌNH TƯ DUY (BẮT BUỘC):
+    1. Xác định Hành Động/Sự Cố (Ví dụ: Chấm thiếu, viết sai họ tên, làm rách, đốt nhầm...).
+    2. Xác định Đối Tượng (Ví dụ: Ngôi nhà nhỏ, bài Chú Đại Bi, Lư hương...).
+    3. Ghép lại thành câu hỏi dạng: "Quy định về..." hoặc "Cách xử lý khi...".
+
+    VÍ DỤ MẪU (Học theo cách tư duy này):
+    - User: "đệ quên chấm đủ số biến kinh đã niệm lên nnn, sau đó đệ lại đốt đi rồi, bây giờ đệ phải làm thế nào ?"
+    -> Output: Cách xử lý khi lỡ hóa Ngôi nhà nhỏ chưa chấm đủ kinh
     
-    Câu hỏi: "${userQuestion}"
-    Output (Chỉ các từ khóa):`;
+    - User: "mình lỡ làm rớt tờ nnn xuống đất bị bẩn thì có dùng được không"
+    -> Output: Quy định về Ngôi nhà nhỏ bị bẩn hoặc rơi xuống đất
+    
+    - User: "hôm nay lỡ ăn mặn rồi có được tụng kinh không"
+    -> Output: Quy định về việc tụng kinh sau khi ăn đồ mặn
+
+    YÊU CẦU ĐẦU RA:
+    Chỉ trả về duy nhất câu hỏi đã chuẩn hóa. Không giải thích gì thêm.
+    `;
     
     try {
         const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, getRandomStartIndex());
-        let keywords = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
+        let refinedQuery = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
         
-        // Làm sạch và trả về
-        console.log(`🧠 AI suy luận từ khóa: "${keywords}"`);
-        return keywords.replace(/\n/g, " ").replace(/["']/g, "");
-    } catch (e) { return userQuestion; }
+        // Làm sạch kết quả
+        refinedQuery = refinedQuery.replace(/\n/g, " ").replace(/["']/g, "").replace(/^Output:\s*/i, "");
+        
+        console.log(`🧠 User hỏi: "${userQuestion}"`);
+        console.log(`💡 AI hiểu là: "${refinedQuery}"`); // Xem log để kiểm tra độ thông minh
+        
+        return refinedQuery;
+    } catch (e) { 
+        console.error("Lỗi phân tích câu hỏi:", e.message);
+        return userQuestion; // Nếu lỗi thì dùng tạm câu gốc
+    }
 }
 
 async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
