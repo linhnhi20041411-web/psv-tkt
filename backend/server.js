@@ -19,11 +19,17 @@ const io = new Server(server, {
 // Biến lưu trữ tạm: Tin nhắn Telegram ID -> Socket ID người dùng
 const pendingRequests = new Map();
 
-// Lắng nghe kết nối
 io.on('connection', (socket) => {
     console.log('👤 User Connected:', socket.id);
+
     socket.on('disconnect', () => {
-        // Có thể dọn dẹp pendingRequests nếu cần
+        console.log('User Disconnected:', socket.id);
+        // Dọn dẹp bộ nhớ khi user thoát
+        if (socketToMsgId.has(socket.id)) {
+            const msgIds = socketToMsgId.get(socket.id);
+            msgIds.forEach(id => pendingRequests.delete(id));
+            socketToMsgId.delete(socket.id);
+        }
     });
 });
 const PORT = process.env.PORT || 3001;
@@ -342,10 +348,17 @@ app.post('/api/chat', async (req, res) => {
                 parse_mode: 'HTML'
             });
 
-            // 2. Lưu Socket ID để chờ Admin trả lời
+            // 2. Lưu Socket ID vào bộ nhớ tạm
             if (teleRes.data && teleRes.data.result && socketId) {
                 const msgId = teleRes.data.result.message_id;
                 pendingRequests.set(msgId, socketId);
+                
+                // --- THÊM ĐOẠN NÀY ĐỂ DỌN DẸP ---
+                if (!socketToMsgId.has(socketId)) {
+                    socketToMsgId.set(socketId, []);
+                }
+                socketToMsgId.get(socketId).push(msgId);
+                // -------------------------------
             }
 
             // 3. Trả về câu thông báo mặc định (Đã sửa chính tả giúp bạn: nát -> lát, huỳnh -> huynh)
@@ -375,16 +388,17 @@ app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res)
             const originalMsgId = message.reply_to_message.message_id; // ID câu hỏi gốc
             const adminReply = message.text; // Câu trả lời của bạn
 
-            // Kiểm tra xem câu hỏi gốc có trong danh sách chờ không
+            // Kiểm tra trong bộ nhớ tạm xem có ai đang chờ câu này không
             if (pendingRequests.has(originalMsgId)) {
                 const userSocketId = pendingRequests.get(originalMsgId);
                 
-                // Gửi câu trả lời về NGAY LẬP TỨC cho người dùng qua Socket
+                // BẮN TIN NHẮN VỀ WEB QUA SOCKET
                 io.to(userSocketId).emit('admin_reply', adminReply);
                 
-                // Xóa khỏi danh sách chờ
-                pendingRequests.delete(originalMsgId);
-                console.log(`✅ Đã chuyển câu trả lời tới Socket: ${userSocketId}`);
+                // ⚠️ QUAN TRỌNG: KHÔNG XÓA DÒNG NÀY NỮA
+                // pendingRequests.delete(originalMsgId); // <--- Đã comment lại để chat được nhiều câu
+                
+                console.log(`✅ Đã chuyển câu trả lời (tiếp theo) tới Socket: ${userSocketId}`);
             }
         }
         res.sendStatus(200); // Báo cho Telegram biết là đã nhận được
