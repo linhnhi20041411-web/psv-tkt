@@ -316,23 +316,23 @@ app.post('/api/chat', async (req, res) => {
         // 4. Xử lý khi không có dữ liệu
         if (!documents || documents.length === 0) {
             
-            // ---> THÊM ĐOẠN NÀY ĐỂ BÁO VỀ TELEGRAM <---
             console.log("⚠️ Không tìm thấy -> Chuyển Telegram.");
             
-            // Xử lý ký tự đặc biệt để tránh lỗi Telegram
+            // Xử lý ký tự đặc biệt
             const safeUserQ = question
                 .replace(/&/g, "&amp;")
                 .replace(/</g, "&lt;")
                 .replace(/>/g, "&gt;");
 
+            // GỬI TELEGRAM (Đảm bảo dòng này KHÔNG bị comment)
             await sendTelegramAlert(
                 `❓ <b>CÂU HỎI CẦN HỖ TRỢ</b>\n\n` +
                 `User: "${safeUserQ}"\n\n` +
                 `👉 <i>Admin hãy Reply tin nhắn này để trả lời.</i>`
             );
 
-            // Lưu lại request để Admin reply được (Nếu dùng Webhook)
-            // (Nếu bạn muốn Admin reply qua Telegram được thì cần thêm logic lưu socketId vào pendingRequests ở đây nữa, nhưng để báo đơn giản thì đoạn trên là đủ).
+            // Lưu lại để reply (Nếu cần)
+            // ... (Logic lưu socketId nếu muốn)
 
             return res.json({ 
                 answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Đệ đã chuyển câu hỏi đến Admin để hỗ trợ thêm. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" 
