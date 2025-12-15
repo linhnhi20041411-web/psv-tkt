@@ -318,7 +318,7 @@ app.post('/api/chat', async (req, res) => {
                 - Nếu thông tin không có trong văn bản nguồn, hoặc độ liên quan quá thấp.
                 - BẮT BUỘC trả lời chính xác cụm từ duy nhất: "NO_INFO" (Không thêm bớt gì khác).
             4.  **XƯNG HÔ:** Bạn tự xưng là "đệ" và gọi người hỏi là "Sư huynh".
-            5.  **XỬ LÝ LINK:** Giữ nguyên URL, KHÔNG dùng Markdown link.
+            5.  **XỬ LÝ LINK:** Giữ nguyên URL, KHÔNG dùng Markdown link. Cuối câu trả lời DÁN LINK GỐC.
             6.  **PHONG CÁCH:** Trả lời NGẮN GỌN, SÚC TÍCH.
             
             --- VĂN BẢN NGUỒN ---
