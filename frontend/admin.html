@@ -7,7 +7,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
     <style>
-        /* Hiệu ứng mờ cho Modal */
         .modal { transition: opacity 0.25s ease; }
         body.modal-active { overflow-x: hidden; overflow-y: visible !important; }
     </style>
@@ -139,7 +138,7 @@
     </div>
 
     <script>
-        const API_URL = "https://psv-tkt.onrender.com"; // Sửa lại nếu chạy Localhost
+        const API_URL = "https://psv-tkt.onrender.com"; // Link server Render
         
         // --- 1. QUẢN LÝ PHIÊN ĐĂNG NHẬP ---
         function checkSession() {
@@ -199,8 +198,8 @@
                 json.data.forEach(item => {
                     const title = item.metadata?.title || 'No Title';
                     const contentPreview = item.content.substring(0, 100) + "...";
-                    // Encode dữ liệu để truyền vào hàm openEditModal an toàn
                     const safeItem = encodeURIComponent(JSON.stringify(item));
+                    const safeTitle = (item.metadata?.title || '').replace(/'/g, "\\'"); // Xử lý dấu nháy đơn
                     
                     tbody.innerHTML += `
                         <tr class="hover:bg-gray-50 border-b group">
@@ -213,7 +212,8 @@
                             <td class="px-4 py-3 text-center">
                                 <div class="flex flex-col gap-2 opacity-100 sm:opacity-0 group-hover:opacity-100 transition">
                                     <button onclick="openEditModal('${safeItem}')" class="bg-blue-100 text-blue-700 px-3 py-1 rounded text-xs font-bold hover:bg-blue-200"><i class="fas fa-pen"></i> Sửa</button>
-                                    <button onclick="deleteSinglePost('${item.url}')" class="bg-red-100 text-red-700 px-3 py-1 rounded text-xs font-bold hover:bg-red-200"><i class="fas fa-trash"></i> Xóa</button>
+                                    
+                                    <button onclick="deletePost(${item.id}, '${safeTitle}')" class="bg-red-100 text-red-700 px-3 py-1 rounded text-xs font-bold hover:bg-red-200"><i class="fas fa-trash"></i> Xóa</button>
                                 </div>
                             </td>
                         </tr>`;
@@ -224,17 +224,9 @@
         // Mở Modal Sửa
         function openEditModal(encodedItem) {
             const item = JSON.parse(decodeURIComponent(encodedItem));
-            // Tách Tiêu đề và Nội dung từ content gốc (để hiển thị đẹp)
-            // Format gốc: "Tiêu đề: ABC\nNội dung: XYZ"
-            let contentOnly = item.content;
-            
-            // Cố gắng loại bỏ prefix "Tiêu đề: ... Nội dung:" để người dùng chỉ sửa phần ruột
-            // Tuy nhiên để an toàn, ta cứ hiển thị raw content, nhưng ưu tiên lấy title từ metadata
-            
             document.getElementById('editId').value = item.id;
             document.getElementById('editTitle').value = item.metadata?.title || "";
             
-            // Xử lý hiển thị nội dung: Cố gắng bỏ dòng "Tiêu đề:..." và "Nội dung:..." nếu có
             let displayContent = item.content;
             const regex = /Tiêu đề:.*?\nNội dung:([\s\S]*)/;
             const match = item.content.match(regex);
@@ -277,7 +269,7 @@
             streamRequest(`${API_URL}/api/admin/remove-duplicates`, { password: getPass() }, 'btnDedup', '<i class="fas fa-copy mr-2"></i> Tìm & Xóa Trùng');
         }
 
-        // --- CÁC HÀM TIỆN ÍCH CHUNG (LOG, STREAM, SWITCH TAB) ---
+        // --- CÁC HÀM TIỆN ÍCH CHUNG ---
         function log(msg) {
             const logBox = document.getElementById('logs');
             document.getElementById('statusArea').classList.remove('hidden');
@@ -319,13 +311,11 @@
             if(!url) return alert("Thiếu URL");
             if(!confirm("Xóa vĩnh viễn bài này?")) return;
             try {
-                const res = await fetch(`${API_URL}/api/admin/delete-post`, {
-                    method: 'POST', headers: {'Content-Type':'application/json'},
-                    body: JSON.stringify({password: getPass(), url})
-                });
-                const d = await res.json();
-                alert(d.message || d.error);
-                if(d.success && document.getElementById('manageTableBody').innerHTML.includes('tr')) searchPosts(); 
+                // Lưu ý: Đây là API xóa theo URL (delete-post trong server của bạn có hỗ trợ cả URL và ID tùy logic)
+                // Nhưng trong server.js hiện tại, /api/admin/delete-post dùng ID. 
+                // Nếu bạn muốn dùng hàm này cho ô nhập URL, bạn cần sửa server để hỗ trợ xóa theo URL.
+                // Tạm thời, hàm này chỉ dùng cho ô nhập URL ở tab Bảo trì.
+                alert("Chức năng xóa theo URL đang bảo trì. Vui lòng dùng chức năng Xóa trong tab Quản Lý.");
             } catch(e) { alert(e.message); }
         }
 
@@ -334,14 +324,12 @@
             const btn = document.getElementById('btnScan');
             btn.disabled = true;
             try {
-                // 1. Get URLs
                 log("> Đang tải danh sách URL...\n");
                 const resList = await fetch(`${API_URL}/api/admin/get-all-urls`, { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ password: getPass() }) });
                 const dataList = await resList.json();
                 const total = dataList.urls.length;
                 log(`> Tổng: ${total} links. Bắt đầu từ ${startIndex}...\n`);
 
-                // 2. Scan Batch
                 const batchSize = 20;
                 for (let i = startIndex; i < total; i += batchSize) {
                     const batch = dataList.urls.slice(i, i + batchSize);
@@ -351,6 +339,40 @@
                 alert("Hoàn tất quy trình!");
             } catch(e) { log("Lỗi: " + e.message); }
             finally { btn.disabled = false; }
+        }
+
+        // --- HÀM XÓA BÀI VIẾT THEO ID (CHUẨN) ---
+        async function deletePost(postId, postTitle) {
+            if (!confirm(`⚠️ CẢNH BÁO:\nBạn có chắc chắn muốn xóa bài viết:\n"${postTitle}"\n\nHành động này không thể hoàn tác!`)) {
+                return;
+            }
+            
+            const password = window.adminPassword || sessionStorage.getItem('adminPass') || prompt("Nhập mật khẩu Admin:");
+            if (!password) return;
+
+            try {
+                const response = await fetch(`${API_URL}/api/admin/delete-post`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        password: password,
+                        id: postId,      
+                        title: postTitle 
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (response.ok && result.success) {
+                    alert("✅ Đã xóa bài viết thành công!");
+                    searchPosts(); // Refresh list
+                } else {
+                    alert(`❌ Lỗi: ${result.error || 'Không xóa được'}`);
+                }
+            } catch (error) {
+                console.error("Lỗi xóa bài:", error);
+                alert("❌ Lỗi kết nối Server! Vui lòng kiểm tra lại.");
+            }
         }
         
         // Manual Add & Start Sync (Tự động lấy pass)
