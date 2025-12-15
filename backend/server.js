@@ -383,7 +383,7 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// --- API NHẬN TIN NHẮN TỪ TELEGRAM (WEBHOOK) ---
+// --- API NHẬN TIN NHẮN TỪ TELEGRAM (WEBHOOK - HỖ TRỢ ẢNH) ---
 app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
     try {
         const { message } = req.body;
@@ -391,22 +391,53 @@ app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res)
         // Kiểm tra xem có phải là tin nhắn TRẢ LỜI (Reply) không
         if (message && message.reply_to_message) {
             const originalMsgId = message.reply_to_message.message_id; // ID câu hỏi gốc
-            const adminReply = message.text; // Câu trả lời của bạn
-
-            // Kiểm tra trong bộ nhớ tạm xem có ai đang chờ câu này không
+            
+            // Kiểm tra xem câu hỏi gốc có trong danh sách chờ không
             if (pendingRequests.has(originalMsgId)) {
                 const userSocketId = pendingRequests.get(originalMsgId);
                 
-                // BẮN TIN NHẮN VỀ WEB QUA SOCKET
-                io.to(userSocketId).emit('admin_reply', adminReply);
+                // --- TRƯỜNG HỢP 1: ADMIN GỬI ẢNH ---
+                if (message.photo) {
+                    try {
+                        // 1. Lấy file_id của ảnh chất lượng cao nhất (cái cuối cùng trong mảng)
+                        const fileId = message.photo[message.photo.length - 1].file_id;
+                        
+                        // 2. Lấy đường dẫn file từ Telegram
+                        const getFileUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/getFile?file_id=${fileId}`;
+                        const fileInfoRes = await axios.get(getFileUrl);
+                        const filePath = fileInfoRes.data.result.file_path;
+
+                        // 3. Tải ảnh về và chuyển sang Base64
+                        const downloadUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_TOKEN}/${filePath}`;
+                        const imageRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+                        const base64Image = Buffer.from(imageRes.data, 'binary').toString('base64');
+                        const imgSrc = `data:image/jpeg;base64,${base64Image}`;
+
+                        // 4. Gửi ảnh qua Socket
+                        io.to(userSocketId).emit('admin_reply_image', imgSrc);
+                        console.log(`📸 Đã chuyển ẢNH tới Socket: ${userSocketId}`);
+
+                        // Nếu có caption (chú thích ảnh) thì gửi thêm text
+                        if (message.caption) {
+                            io.to(userSocketId).emit('admin_reply', message.caption);
+                        }
+
+                    } catch (imgError) {
+                        console.error("Lỗi xử lý ảnh:", imgError.message);
+                        io.to(userSocketId).emit('admin_reply', "[Lỗi: Admin gửi ảnh nhưng hệ thống không tải được]");
+                    }
+                } 
+                // --- TRƯỜNG HỢP 2: ADMIN GỬI TEXT ---
+                else if (message.text) {
+                    const adminReply = message.text; 
+                    io.to(userSocketId).emit('admin_reply', adminReply);
+                    console.log(`✅ Đã chuyển TEXT tới Socket: ${userSocketId}`);
+                }
                 
-                // ⚠️ QUAN TRỌNG: KHÔNG XÓA DÒNG NÀY NỮA
-                // pendingRequests.delete(originalMsgId); // <--- Đã comment lại để chat được nhiều câu
-                
-                console.log(`✅ Đã chuyển câu trả lời (tiếp theo) tới Socket: ${userSocketId}`);
+                // Lưu ý: Không xóa pendingRequests để admin có thể chat tiếp
             }
         }
-        res.sendStatus(200); // Báo cho Telegram biết là đã nhận được
+        res.sendStatus(200); 
     } catch (e) {
         console.error("Lỗi Webhook:", e);
         res.sendStatus(500);
