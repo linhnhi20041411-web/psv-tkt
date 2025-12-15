@@ -625,6 +625,35 @@ app.post('/api/admin/update-post', async (req, res) => {
     }
 });
 
+// --- API XÓA BÀI VIẾT (Xóa 1 bài cụ thể) ---
+app.post('/api/admin/delete-post', async (req, res) => {
+    const { password, id, title } = req.body; // Lấy ID và Tiêu đề (để log)
+    
+    // 1. Kiểm tra mật khẩu
+    if (password !== ADMIN_PASSWORD) {
+        return res.status(403).json({ error: "Sai mật khẩu!" });
+    }
+
+    try {
+        // 2. Gọi lệnh xóa trong Supabase
+        const { error } = await supabase
+            .from('vn_buddhism_content')
+            .delete()
+            .eq('id', id);
+
+        if (error) throw error;
+
+        // 3. Gửi thông báo về Telegram cho an toàn
+        await sendTelegramAlert(`🗑️ <b>ADMIN ĐÃ XÓA BÀI VIẾT</b>\n\n🆔 ID: ${id}\n📝 Tiêu đề: ${title || "Không rõ"}`);
+
+        res.json({ success: true, message: "Đã xóa bài viết thành công!" });
+
+    } catch (e) {
+        console.error("Lỗi xóa bài:", e.message);
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // --- API XÓA BÀI TRÙNG LẶP (DEDUPLICATE - PHIÊN BẢN QUÉT FULL DATA) ---
 app.post('/api/admin/remove-duplicates', async (req, res) => {
     const { password } = req.body;
