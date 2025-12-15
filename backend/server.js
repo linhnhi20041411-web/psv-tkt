@@ -265,11 +265,13 @@ app.post('/api/chat', async (req, res) => {
 
         QUY TẮC BẮT BUỘC (TUÂN THỦ 100%):
         1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN".
-        2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-).
+        2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-),KHÔNG chào hỏi, KHÔNG mở bài, KHÔNG kết luận. (Chỉ liệt kê nội dung).
         3. CẤM TUYỆT ĐỐI: Không được sử dụng dấu ngoặc vuông [ hoặc ] trong câu trả lời.
-        4. TRÍCH DẪN LINK: Cuối mỗi ý, xuống dòng và ghi link trần theo mẫu.
-        5. XƯNG HÔ: Tự xưng "đệ", gọi người hỏi "Sư huynh".
-
+        4. TRÍCH DẪN LINK: Cuối mỗi ý quan trọng.
+        5. CHUYỂN ĐỔI NGÔI KỂ (QUAN TRỌNG): 
+           - Các từ tự xưng trong văn bản nguồn như "con", "tôi", "trò" -> Đổi thành "Sư huynh".
+           - Ví dụ: Bài gốc "Khi con niệm kinh" -> Trả lời "Khi Sư huynh niệm kinh".
+           
         --- VĂN BẢN NGUỒN ---
         ${contextString}
         --- HẾT VĂN BẢN NGUỒN ---
@@ -331,8 +333,8 @@ app.post('/api/chat', async (req, res) => {
         // 1. Xóa sạch dấu [ và ] ở bất kỳ đâu trong văn bản
         aiResponse = aiResponse.replace(/[\[\]]/g, ""); 
         
-        // 2. Xóa các ký tự đánh dấu Markdown link thừa (nếu có) như (http...)
-        // (Chỉ giữ lại URL trần)
+        // 2. Định nghĩa câu chào của bạn
+        const fixedIntro = "Kính thưa Sư Huynh ! sau đây là các khai thị của Đài Trưởng Lư đệ có tìm được. Mong rằng các khai thị này sẽ hữu ích cho Sư huynh ạ !\n\n";
         
         // =================================================================================
 
