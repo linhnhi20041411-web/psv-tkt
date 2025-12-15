@@ -13,8 +13,10 @@ const app = express();
 
 // --- KHỞI TẠO SERVER & SOCKET ---
 const server = http.createServer(app); 
-const allowedOrigins = ["https://psvtkt.pmtl.site"]; // Thêm các domain của bạn
-app.use(cors({ origin: allowedOrigins }));
+
+// SỬA Ở ĐÂY: Cho phép mọi nguồn kết nối để tránh lỗi CORS khi dùng Admin
+app.use(cors()); 
+
 const io = new Server(server, {
     cors: { origin: "*" } 
 });
@@ -36,7 +38,7 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 app.use(express.json({ limit: '50mb' }));
-app.use(cors());
+// app.use(cors()); // Đã khai báo ở trên rồi, dòng này thừa nhưng để cũng không sao
 
 // --- CẤU HÌNH ---
 const rawKeys = process.env.GEMINI_API_KEYS || "";
