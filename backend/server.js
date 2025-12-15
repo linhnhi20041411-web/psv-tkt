@@ -625,16 +625,14 @@ app.post('/api/admin/update-post', async (req, res) => {
     }
 });
 
-// --- API XÓA BÀI VIẾT (Đã Fix lỗi undefined) ---
+// --- API XÓA BÀI VIẾT (Hỗ trợ xóa theo ID hoặc URL) ---
 app.post('/api/admin/delete-post', async (req, res) => {
-    const { password, id, title } = req.body; 
+    const { password, id, url, title } = req.body; 
     
-    // 1. In ra log để xem Frontend gửi cái gì lên (Debug)
-    console.log("👉 Đang xóa bài với ID:", id); 
+    console.log(`👉 Yêu cầu xóa: ${id ? 'ID=' + id : 'URL=' + url}`); 
 
-    // 2. Kiểm tra dữ liệu đầu vào
-    if (!id || id === 'undefined') {
-        return res.status(400).json({ error: "Lỗi: Không tìm thấy ID bài viết cần xóa!" });
+    if (!id && !url) {
+        return res.status(400).json({ error: "Lỗi: Cần cung cấp ID hoặc URL để xóa!" });
     }
 
     if (password !== ADMIN_PASSWORD) {
@@ -642,16 +640,26 @@ app.post('/api/admin/delete-post', async (req, res) => {
     }
 
     try {
-        const { error } = await supabase
-            .from('vn_buddhism_content')
-            .delete()
-            .eq('id', id); // ID phải là số
+        let query = supabase.from('vn_buddhism_content').delete();
+
+        // Nếu có ID thì xóa theo ID (xóa 1 dòng)
+        if (id) {
+            query = query.eq('id', id);
+        } 
+        // Nếu có URL thì xóa tất cả bài trùng URL này (Dọn rác triệt để)
+        else if (url) {
+            query = query.eq('url', url);
+        }
+
+        const { error, count } = await query; // count sẽ cho biết xóa được bao nhiêu dòng
 
         if (error) throw error;
 
-        //await sendTelegramAlert(`🗑️ <b>ADMIN ĐÃ XÓA BÀI VIẾT</b>\n\n🆔 ID: ${id}\n📝 Tiêu đề: ${title || "Không rõ"}`);
+        // Báo Telegram
+        const msgType = id ? `ID: ${id}` : `URL: ${url}`;
+        //await sendTelegramAlert(`🗑️ <b>ADMIN ĐÃ XÓA DỮ LIỆU</b>\n\n🎯 Đối tượng: ${msgType}\n📝 Ghi chú: ${title || "Dọn dẹp thủ công"}`);
 
-        res.json({ success: true, message: "Đã xóa bài viết thành công!" });
+        res.json({ success: true, message: `Đã xóa thành công!` });
 
     } catch (e) {
         console.error("Lỗi xóa bài:", e.message);
