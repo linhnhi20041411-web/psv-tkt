@@ -625,25 +625,30 @@ app.post('/api/admin/update-post', async (req, res) => {
     }
 });
 
-// --- API XÓA BÀI VIẾT (Xóa 1 bài cụ thể) ---
+// --- API XÓA BÀI VIẾT (Đã Fix lỗi undefined) ---
 app.post('/api/admin/delete-post', async (req, res) => {
-    const { password, id, title } = req.body; // Lấy ID và Tiêu đề (để log)
+    const { password, id, title } = req.body; 
     
-    // 1. Kiểm tra mật khẩu
+    // 1. In ra log để xem Frontend gửi cái gì lên (Debug)
+    console.log("👉 Đang xóa bài với ID:", id); 
+
+    // 2. Kiểm tra dữ liệu đầu vào
+    if (!id || id === 'undefined') {
+        return res.status(400).json({ error: "Lỗi: Không tìm thấy ID bài viết cần xóa!" });
+    }
+
     if (password !== ADMIN_PASSWORD) {
         return res.status(403).json({ error: "Sai mật khẩu!" });
     }
 
     try {
-        // 2. Gọi lệnh xóa trong Supabase
         const { error } = await supabase
             .from('vn_buddhism_content')
             .delete()
-            .eq('id', id);
+            .eq('id', id); // ID phải là số
 
         if (error) throw error;
 
-        // 3. Gửi thông báo về Telegram cho an toàn
         await sendTelegramAlert(`🗑️ <b>ADMIN ĐÃ XÓA BÀI VIẾT</b>\n\n🆔 ID: ${id}\n📝 Tiêu đề: ${title || "Không rõ"}`);
 
         res.json({ success: true, message: "Đã xóa bài viết thành công!" });
