@@ -267,7 +267,7 @@ app.post('/api/chat', async (req, res) => {
         1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN".
         2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-),KHÔNG chào hỏi, KHÔNG mở bài, KHÔNG kết luận. (Chỉ liệt kê nội dung).
         3. CẤM TUYỆT ĐỐI: Không được sử dụng dấu ngoặc vuông [ hoặc ] trong câu trả lời.
-        4. TRÍCH DẪN LINK: Cuối mỗi ý quan trọng.
+        4. TRÍCH DẪN LINK: Cuối mỗi ý quan trọng, xuống dòng và ghi: https://...
         5. CHUYỂN ĐỔI NGÔI KỂ (QUAN TRỌNG): 
            - Các từ tự xưng trong văn bản nguồn như "con", "tôi", "trò" -> Đổi thành "Sư huynh".
            - Ví dụ: Bài gốc "Khi con niệm kinh" -> Trả lời "Khi Sư huynh niệm kinh".
