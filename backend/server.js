@@ -223,14 +223,12 @@ async function searchSupabaseContext(query) {
     try {
         console.log(`🔎 Đang tìm kiếm: "${query}"`);
         
-        // --- CHIẾN THUẬT 1: TÌM TRONG TIÊU ĐỀ (TEXT SEARCH) ---
-        // Ưu tiên tuyệt đối các bài có tiêu đề khớp với từ khóa
-        // Ví dụ: query="mở nhà hàng" -> Khớp ngay bài "Vấn đề mở nhà hàng chay"
-        const { data: titleMatches, error: titleError } = await supabase
+        // 1. Tìm theo Tiêu đề & Nội dung (Nới lỏng)
+        const { data: titleMatches } = await supabase
             .from('vn_buddhism_content')
             .select('*')
-            // .textSearch('fts', `'${query}'`, { config: 'english', type: 'websearch' }) // <--- Comment dòng này lại hoặc xóa đi
-            .ilike('content', `%Tiêu đề: %${query}%`) // Chỉ giữ lại dòng này là đủ an toàn
+            // ✅ MỚI: Chỉ cần chứa từ khóa là được (Bỏ cụm "Tiêu đề:")
+            .ilike('content', `%${query}%`) 
             .limit(5);
 
         // --- CHIẾN THUẬT 2: TÌM THEO VECTOR (SEMANTIC SEARCH) ---
@@ -288,12 +286,13 @@ app.post('/api/chat', async (req, res) => {
 
         const fullQuestion = dichVietTat(question);
         
-        // Bước 1: Tư duy từ khóa (Giữ nguyên)
+        // Bước 1: Tư duy từ khóa (Chỉ để log xem AI hiểu thế nào, không dùng để tìm nữa)
         const searchKeywords = await aiExtractKeywords(fullQuestion);
         console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
 
         // Bước 2: Tìm kiếm dữ liệu
-        const documents = await searchSupabaseContext(searchKeywords);
+        // ✅ MỚI: Dùng trực tiếp câu hỏi đầy đủ (đã dịch từ viết tắt) để tìm Vector
+        const documents = await searchSupabaseContext(fullQuestion);
 
         let needHumanSupport = false;
         let aiResponse = "";
