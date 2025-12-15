@@ -10,17 +10,18 @@ require('dotenv').config();
 
 const parser = new Parser();
 const app = express();
-// ---> THÊM ĐOẠN KHỞI TẠO SOCKET NÀY:
-const server = http.createServer(app); // Tạo server bọc lấy app
+
+// --- KHỞI TẠO SERVER & SOCKET ---
+const server = http.createServer(app); 
 const io = new Server(server, {
-    cors: { origin: "*" } // Cho phép mọi nguồn kết nối
+    cors: { origin: "*" } 
 });
 
 // Biến lưu trữ tạm: Tin nhắn Telegram ID -> Socket ID người dùng
 const pendingRequests = new Map();
 const socketToMsgId = new Map();
 
-// Lắng nghe kết nối
+// Lắng nghe kết nối Socket
 io.on('connection', (socket) => {
     console.log('👤 User Connected:', socket.id);
 
@@ -28,7 +29,6 @@ io.on('connection', (socket) => {
         // Dọn dẹp bộ nhớ khi user thoát
         if (socketToMsgId.has(socket.id)) {
             const msgIds = socketToMsgId.get(socket.id);
-            // Xóa các request đang chờ của user này
             if (msgIds) {
                 msgIds.forEach(id => pendingRequests.delete(id));
             }
@@ -58,12 +58,25 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 
 // --- 2. BỘ TỪ ĐIỂN VIẾT TẮT ---
 const TU_DIEN_VIET_TAT = {
-    "pmtl": "Pháp Môn Tâm Linh", "btpp": "Bạch Thoại Phật Pháp", "nnn": "Ngôi nhà nhỏ", "psv": "Phụng Sự Viên", "sh": "Sư Huynh",
-    "kbt": "Kinh Bài Tập", "cđb": "Chú Đại Bi", "cdb": "Chú Đại Bi", "tk": "Tâm Kinh", "lpdshv": "Lễ Phật Đại Sám Hối Văn",
-    "vsc": "Vãng Sanh Chú", "cdbstc": "Công Đức Bảo Sơn Thần Chú", "cđbstc": "Công Đức Bảo Sơn Thần Chú",
-    "nyblvdln": "Như Ý Bảo Luân Vương Đà La Ni", "bkcn": "Bổ Khuyết Chân Ngôn", "tpdtcn": "Thất Phật Diệt Tội Chân Ngôn",
-    "qalccn": "Quán Âm Linh Cảm Chân Ngôn", "tvltqdqmvtdln": "Thánh Vô Lượng Thọ Quyết Định Quang Minh Vương Đà La Ni",
-    "ps": "Phóng Sinh", "xf": "Xoay pháp", "knt": "Khai Nghiệp Tướng", "ht": "Huyền Trang"
+    "pmtl": "Pháp Môn Tâm Linh",
+    "btpp": "Bạch Thoại Phật Pháp",
+    "nnn": "Ngôi nhà nhỏ",
+    "psv": "Phụng Sự Viên",
+    "sh": "Sư Huynh",
+    "kbt": "Kinh Bài Tập",
+    "ps": "Phóng Sinh",
+    "cđb": "Chú Đại Bi",
+    "cdb": "Chú Đại Bi", 
+    "tk": "Tâm Kinh",
+    "lpdshv": "Lễ Phật Đại Sám Hối Văn",
+    "vsc": "Vãng Sanh Chú",
+    "cdbstc": "Công Đức Bảo Sơn Thần Chú",
+    "cđbstc": "Công Đức Bảo Sơn Thần Chú",
+    "nyblvdln": "Như Ý Bảo Luân Vương Đà La Ni",
+    "bkcn": "Bổ Khuyết Chân Ngôn",
+    "tpdtcn": "Thất Phật Diệt Tội Chân Ngôn",
+    "qalccn": "Quán Âm Linh Cảm Chân Ngôn",
+    "tvltqdqmvtdln": "Thánh Vô Lượng Thọ Quyết Định Quang Minh Vương Đà La Ni",
 };
 
 function dichVietTat(text) {
@@ -91,19 +104,16 @@ async function sendTelegramAlert(message) {
 
 function cleanText(text) {
     if (!text) return "";
-    // Xóa thẻ HTML, thay br/p bằng xuống dòng
     let clean = text.replace(/<br\s*\/?>/gi, '\n')
                     .replace(/<\/p>/gi, '\n')
                     .replace(/<[^>]*>?/gm, '')
                     .replace(/&nbsp;/g, ' ')
-                    .replace(/\r\n/g, '\n');   
-    // Xóa dòng trống thừa
+                    .replace(/\r\n/g, '\n');    
     return clean.replace(/\n\s*\n\s*\n/g, '\n\n').trim();
 }
 
 function chunkText(text, maxChunkSize = 2000) {
     if (!text) return [];
-    // Tách theo đoạn văn
     const paragraphs = text.split(/\n\s*\n/);
     const chunks = [];
     let currentChunk = "";
@@ -112,16 +122,13 @@ function chunkText(text, maxChunkSize = 2000) {
         const cleanP = p.trim();
         if (!cleanP) continue;
         
-        // Nếu cộng thêm đoạn này mà vẫn nhỏ hơn maxChunkSize thì gộp vào
         if ((currentChunk.length + cleanP.length) < maxChunkSize) { 
             currentChunk += (currentChunk ? "\n\n" : "") + cleanP; 
         } else { 
-            // Nếu lớn hơn thì đẩy chunk cũ đi, tạo chunk mới
             if (currentChunk.length > 50) chunks.push(currentChunk); 
             currentChunk = cleanP; 
         }
     }
-    // Đẩy nốt chunk cuối cùng
     if (currentChunk.length > 50) chunks.push(currentChunk);
     return chunks;
 }
@@ -157,232 +164,168 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- HÀM 5: PHÂN TÍCH & CHUẨN HÓA CÂU HỎI (QUAN TRỌNG) ---
+// --- 6. AI EXTRACT KEYWORDS (CẬP NHẬT PROMPT ĐỂ TRÁNH "QUY ĐỊNH") ---
 async function aiExtractKeywords(userQuestion) {
-    // Prompt này ép AI phải "hiểu" tình huống chứ không được "bịa" từ khóa
     const prompt = `
-    Đóng vai: Bạn là Thư ký quản lý thư viện Khai Thị (Pháp Môn Tâm Linh).
+    Nhiệm vụ: Bạn là công cụ trích xuất từ khóa tìm kiếm (SEO).
+    INPUT: "${userQuestion}"
     
-    NHIỆM VỤ:
-    Đọc câu hỏi "tình huống" của người dùng và chuyển đổi nó thành một "Câu hỏi tra cứu" ngắn gọn, dùng đúng thuật ngữ chuyên môn để tìm trong Mục Lục.
-
-    INPUT CỦA NGƯỜI DÙNG: "${userQuestion}"
-
-    QUY TRÌNH TƯ DUY (BẮT BUỘC):
-    1. Xác định Hành Động/Sự Cố (Ví dụ: Chấm thiếu, viết sai họ tên, làm rách, đốt nhầm...).
-    2. Xác định Đối Tượng (Ví dụ: Ngôi nhà nhỏ, bài Chú Đại Bi, Lư hương...).
-    3. Ghép lại thành câu hỏi dạng: "Quy định về..." hoặc "Cách xử lý khi...".
-
-    VÍ DỤ MẪU (Học theo cách tư duy này):
-    - User: "đệ quên chấm đủ số biến kinh đã niệm lên nnn, sau đó đệ lại đốt đi rồi, bây giờ đệ phải làm thế nào ?"
-    -> Output: Cách xử lý khi lỡ hóa Ngôi nhà nhỏ chưa chấm đủ kinh
+    YÊU CẦU:
+    1. Giữ lại các danh từ, động từ quan trọng nhất (Ví dụ: trẻ em, tụng kinh, chú ý, kiêng kỵ).
+    2. Giữ nguyên các thuật ngữ Phật giáo (Ví dụ: Lễ Phật Đại Sám Hối Văn, Chú Đại Bi).
+    3. LOẠI BỎ các từ hư từ (là, thì, mà, ở, những, các...).
+    4. TUYỆT ĐỐI KHÔNG tự thêm các từ như "Quy định", "Luật", "Quy tắc" nếu người dùng không hỏi.
+    5. Kết quả trả về là một chuỗi các từ khóa cách nhau bởi dấu cách.
     
-    - User: "mình lỡ làm rớt tờ nnn xuống đất bị bẩn thì có dùng được không"
-    -> Output: Quy định về Ngôi nhà nhỏ bị bẩn hoặc rơi xuống đất
-    
-    - User: "hôm nay lỡ ăn mặn rồi có được tụng kinh không"
-    -> Output: Quy định về việc tụng kinh sau khi ăn đồ mặn
-
-    YÊU CẦU ĐẦU RA:
-    Chỉ trả về duy nhất câu hỏi đã chuẩn hóa. Không giải thích gì thêm.
+    Input: "${userQuestion}"
+    Output:
     `;
-    
     try {
-        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, getRandomStartIndex());
+        const startIndex = getRandomStartIndex();
+        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, startIndex);
         let refinedQuery = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
-        
-        // Làm sạch kết quả
         refinedQuery = refinedQuery.replace(/\n/g, " ").replace(/["']/g, "").replace(/^Output:\s*/i, "");
-        
-        console.log(`🧠 User hỏi: "${userQuestion}"`);
-        console.log(`💡 AI hiểu là: "${refinedQuery}"`); // Xem log để kiểm tra độ thông minh
-        
+        console.log(`🧠 User: "${userQuestion}" -> Key: "${refinedQuery}"`);
         return refinedQuery;
-    } catch (e) { 
-        console.error("Lỗi phân tích câu hỏi:", e.message);
-        return userQuestion; // Nếu lỗi thì dùng tạm câu gốc
+    } catch (e) {
+        console.error("Lỗi AI Extract:", e.message);
+        return userQuestion;
     }
 }
 
+// --- 7. EMBEDDING & SEARCH ---
 async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
-    if (retryCount >= apiKeys.length) { await sendTelegramAlert("Hết key embedding"); throw new Error("Hết Key Embedding."); }
+    if (retryCount >= apiKeys.length) {
+        await sendTelegramAlert("🆘 Hết Key Embedding (Tạo Vector).");
+        throw new Error("Hết Key Embedding.");
+    }
     const currentIndex = keyIndex % apiKeys.length;
+    const currentKey = apiKeys[currentIndex];
+
     try {
-        const genAI = new GoogleGenerativeAI(apiKeys[currentIndex]);
+        const genAI = new GoogleGenerativeAI(currentKey);
         const model = genAI.getGenerativeModel({ model: "text-embedding-004"});
         const result = await model.embedContent(text);
         return result.embedding.values;
     } catch (error) {
-        if (error.status === 429) { await sleep(500); return callEmbeddingWithRetry(text, currentIndex + 1, retryCount + 1); }
+        if (error.message?.includes('429') || error.status === 429) {
+            await sleep(500);
+            return callEmbeddingWithRetry(text, currentIndex + 1, retryCount + 1);
+        }
         throw error;
     }
 }
 
-// --- 5. HÀM TÌM KIẾM THÔNG MINH (TITLE PRIORITY + VECTOR) ---
-async function searchSupabaseContext(query) {
+// --- HÀM TÌM KIẾM THÔNG MINH (ĐÃ TỐI ƯU VECTOR + KEYWORD) ---
+async function searchSupabaseContext(fullText, keywords) {
     try {
-        console.log(`🔎 Đang tìm kiếm: "${query}"`);
+        console.log(`🔎 Vector (Ý): "${fullText}"`);
+        console.log(`🔎 Text (Từ): "${keywords}"`);
         
-        // 1. Tìm theo Tiêu đề & Nội dung (Nới lỏng)
-        const { data: titleMatches } = await supabase
+        // 1. Tìm theo Tiêu đề/Nội dung (Dùng TỪ KHÓA để quét nhanh)
+        // Dùng 'or' để tìm nếu tiêu đề HOẶC nội dung chứa từ khóa
+        const { data: textMatches } = await supabase
             .from('vn_buddhism_content')
             .select('*')
-            // ✅ MỚI: Chỉ cần chứa từ khóa là được (Bỏ cụm "Tiêu đề:")
-            .ilike('content', `%${query}%`) 
+            .or(`content.ilike.%${keywords}%, metadata->>title.ilike.%${keywords}%`) 
             .limit(5);
 
-        // --- CHIẾN THUẬT 2: TÌM THEO VECTOR (SEMANTIC SEARCH) ---
+        // 2. Tìm theo Vector (Dùng CÂU ĐẦY ĐỦ để hiểu ngữ cảnh sâu)
         const startIndex = getRandomStartIndex();
-        const queryVector = await callEmbeddingWithRetry(query, startIndex);
+        const queryVector = await callEmbeddingWithRetry(fullText, startIndex);
 
         const { data: vectorMatches, error: vectorError } = await supabase.rpc('hybrid_search', {
-            query_text: query,
-            query_embedding: queryVector,
-            match_count: 30, // Lấy 30 bài liên quan
+            query_text: keywords, // Gửi từ khóa ngắn gọn cho bộ lọc Text
+            query_embedding: queryVector, // Gửi câu đầy đủ cho bộ lọc Vector
+            match_count: 30, 
             rrf_k: 60
         });
 
         if (vectorError) throw vectorError;
 
-        // --- GỘP KẾT QUẢ (MERGE & DEDUPLICATE) ---
-        // Nguyên tắc: Bài khớp Tiêu đề (Chiến thuật 1) phải đứng đầu danh sách
-        
+        // Gộp kết quả
         const allDocs = [];
         const seenUrls = new Set();
 
-        // 1. Đưa kết quả khớp Tiêu đề vào trước
-        if (titleMatches && titleMatches.length > 0) {
-            console.log(`✅ Tìm thấy ${titleMatches.length} bài khớp tiêu đề.`);
-            titleMatches.forEach(doc => {
-                if (!seenUrls.has(doc.url)) {
-                    seenUrls.add(doc.url);
-                    allDocs.push(doc);
-                }
-            });
-        }
+        const addDoc = (doc) => {
+            if (!seenUrls.has(doc.url)) {
+                seenUrls.add(doc.url);
+                allDocs.push(doc);
+            }
+        };
 
-        // 2. Đưa kết quả Vector vào sau
-        if (vectorMatches && vectorMatches.length > 0) {
-            vectorMatches.forEach(doc => {
-                if (!seenUrls.has(doc.url)) {
-                    seenUrls.add(doc.url);
-                    allDocs.push(doc);
-                }
-            });
-        }
+        if (textMatches) textMatches.forEach(addDoc);
+        if (vectorMatches) vectorMatches.forEach(addDoc);
 
         return allDocs.length > 0 ? allDocs : null;
 
     } catch (error) {
         console.error("Lỗi tìm kiếm:", error.message);
+        // Gửi báo động nếu lỗi Database
+        await sendTelegramAlert(`❌ Lỗi Tìm Kiếm Supabase:\n${error.message}`);
         return null; 
     }
 }
 
+// --- 8. API CHAT (PHIÊN BẢN ĐƠN GIẢN THEO YÊU CẦU) ---
 app.post('/api/chat', async (req, res) => {
     try {
+        // 1. Nhận dữ liệu (Thêm socketId để tránh lỗi nếu client có gửi)
         const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
+        // 2. Xử lý câu hỏi
         const fullQuestion = dichVietTat(question);
         
-        // Bước 1: Tư duy từ khóa (Chỉ để log xem AI hiểu thế nào, không dùng để tìm nữa)
+        // Bước phân tích từ khóa (Dùng hàm hiện có)
         const searchKeywords = await aiExtractKeywords(fullQuestion);
-        console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
-
-        // Bước 2: Tìm kiếm dữ liệu
-        // ✅ MỚI: Dùng trực tiếp câu hỏi đầy đủ (đã dịch từ viết tắt) để tìm Vector
-        const documents = await searchSupabaseContext(fullQuestion);
-
-        let needHumanSupport = false;
-        let aiResponse = "";
-
-        if (!documents || documents.length === 0) {
-            needHumanSupport = true;
-        } else {
-            let contextString = "";
-            documents.forEach((doc, index) => {
-                contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
-            });
-
-            // PROMPT CẬP NHẬT: Trả về "NO_INFO" để kích hoạt Telegram
-            const systemPrompt = `
-            Bạn là một công cụ trích xuất thông tin chính xác tuyệt đối từ cơ sở dữ liệu Supabase.
-            Nhiệm vụ: Trả lời câu hỏi dựa trên "VĂN BẢN NGUỒN".
-
-            **QUY TẮC BẮT BUỘC:**
-            1.  **NGUỒN DỮ LIỆU DUY NHẤT:** Chỉ được phép sử dụng thông tin có trong phần "VĂN BẢN NGUỒN". TUYỆT ĐỐI KHÔNG sử dụng kiến thức bên ngoài.
-            2.  **CHIA NHỎ:** Tách từng ý quan trọng thành các gạch đầu dòng.
-            3.  **XỬ LÝ KHI KHÔNG TÌM THẤY (QUAN TRỌNG):**
-                - Nếu thông tin không có trong văn bản nguồn, hoặc độ liên quan quá thấp.
-                - BẮT BUỘC trả lời chính xác cụm từ duy nhất: "NO_INFO" (Không thêm bớt gì khác).
-            4.  **XƯNG HÔ:** Bạn tự xưng là "đệ" và gọi người hỏi là "Sư huynh".
-            5.  **XỬ LÝ LINK:** Giữ nguyên URL, KHÔNG dùng Markdown link. Dưới mỗi gạch đầu dòng. DÁN LINK GỐC.
-            6.  **PHONG CÁCH:** Trả lời NGẮN GỌN, SÚC TÍCH.
-            
-            --- VĂN BẢN NGUỒN ---
-            ${contextString}
-            --- HẾT VĂN BẢN NGUỒN ---
-            
-            Câu hỏi: ${fullQuestion}
-            Câu trả lời:`;
-
-            const startIndex = getRandomStartIndex();
-            const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
-
-            aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_INFO";
-            
-            // Nếu AI trả về "NO_INFO" -> Bật chế độ chuyển Telegram
-            if (aiResponse.includes("NO_INFO")) {
-                needHumanSupport = true;
-            }
-        }
-
-        // =====================================================================
-        // XỬ LÝ KẾT QUẢ CUỐI CÙNG
-        // =====================================================================
         
-        if (needHumanSupport) {
-            console.log("⚠️ Câu hỏi không có trong Data hoặc không liên quan -> Chuyển Telegram.");
+        // 3. Tìm kiếm dữ liệu
+        // Lưu ý: Dùng cú pháp (fullQuestion, searchKeywords) để tận dụng thuật toán tìm kiếm tối ưu
+        const documents = await searchSupabaseContext(fullQuestion, searchKeywords);
 
-            // 1. Gửi Telegram
-            const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
-                chat_id: process.env.TELEGRAM_CHAT_ID,
-                text: `❓ <b>CÂU HỎI CẦN HỖ TRỢ</b>\n\n"${question}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời.</i>`,
-                parse_mode: 'HTML'
-            });
-
-            // 2. Lưu lại mối liên hệ
-            if (teleRes.data && teleRes.data.result && socketId) {
-                const msgId = teleRes.data.result.message_id;
-                
-                // Lưu xuôi
-                pendingRequests.set(msgId, socketId);
-
-                if (!socketToMsgId.has(socketId)) {
-                    socketToMsgId.set(socketId, []);
-                }
-                socketToMsgId.get(socketId).push(msgId);
-            }
-
-            // 3. Trả về câu thông báo mặc định (Đã sửa chính tả giúp bạn: nát -> lát, huỳnh -> huynh)
+        // 4. Xử lý khi không có dữ liệu (Trả về câu mặc định như bạn muốn)
+        if (!documents || documents.length === 0) {
             return res.json({ 
-                answer: "Đệ đang chuyển câu hỏi của Sư huynh cho các PSV khác hỗ trợ, mong Sư huynh chờ trong giây lát nhé ! 🙏" 
+                answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" 
             });
         }
 
-        // Nếu có câu trả lời từ AI
-        aiResponse = aiResponse.replace(/[\[\]]/g, ""); // Làm sạch dấu ngoặc
+        // 5. Tạo Context
+        let contextString = "";
+        documents.forEach((doc, index) => {
+            contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
+        });
+
+        // 6. Prompt (Theo yêu cầu của bạn)
+        const systemPrompt = `
+        Bạn là Phụng Sự Viên Ảo.
+        Câu hỏi gốc: "${fullQuestion}"
+        Từ khóa trọng tâm: "${searchKeywords}"
+        Dữ liệu tham khảo: ${contextString}
+        Yêu cầu: Trả lời câu hỏi dựa trên bài viết khớp nhất với từ khóa. Cuối câu trả lời DÁN LINK GỐC.
+        `;
+
+        // 7. Gọi AI (Sửa tên hàm thành callGeminiWithRetry cho khớp với server.js hiện tại)
+        const startIndex = getRandomStartIndex();
+        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
+
+        let aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || "Xin lỗi, đệ chưa nghĩ ra câu trả lời.";
+        
+        // 8. Trả về kết quả
         res.json({ answer: "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse });
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
+        
+        // BÁO LỖI VỀ TELEGRAM (Giữ nguyên tính năng này)
         await sendTelegramAlert(`❌ LỖI API CHAT:\nUser: ${req.body.question}\nError: ${error.message}`);
+        
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
 
-// --- API NHẬN TIN NHẮN TỪ TELEGRAM (WEBHOOK - HỖ TRỢ ẢNH) ---
+// --- API WEBHOOK: NHẬN TIN NHẮN TỪ TELEGRAM (HỖ TRỢ ẢNH & TEXT) ---
 app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
     try {
         const { message } = req.body;
@@ -481,7 +424,9 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
             }
             await sleep(300);
         }
-        if (errCount > 5) await sendTelegramAlert(`⚠️ Cảnh báo Sync Blogger: Có ${errCount} lỗi xảy ra trong quá trình nạp.`);
+        if (errCount > 5) {
+            // await sendTelegramAlert(`⚠️ Cảnh báo Sync Blogger: Có ${errCount} lỗi xảy ra trong quá trình nạp.`);
+        }
         res.write(`\n🎉 HOÀN TẤT!\n`); res.end();
     } catch (e) { 
         res.write(`❌ Lỗi: ${e.message}\n`); 
