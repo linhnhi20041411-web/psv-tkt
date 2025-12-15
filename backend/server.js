@@ -297,32 +297,28 @@ app.post('/api/chat', async (req, res) => {
             }
         }
 
-        // --- BƯỚC 2: CHIẾN THUẬT CỨU NGUY (RECITATION) ---
+        // --- BƯỚC 2: CHIẾN THUẬT CỨU NGUY (TRẢ VỀ DANH SÁCH LINK AN TOÀN) ---
         if (finishReason === "RECITATION" || !aiResponse) {
-            console.log("⚠️ Recitation Blocked. Dùng Prompt Diễn Giải...");
-            const promptDienGiai = `Bạn là trợ lý tu tập.
-            NV: Trả lời câu hỏi: "${fullQuestion}" dựa trên văn bản nguồn.
-            VẤN ĐỀ: Lỗi bản quyền trích dẫn.
-            GIẢI PHÁP:
-            1. Đọc hiểu ý chính.
-            2. VIẾT LẠI (Diễn giải) ý đó dưới dạng gạch đầu dòng.
-            3. TUYỆT ĐỐI KHÔNG dùng dấu ngoặc vuông [ ].
-            4. Kèm Link gốc (URL trần) ở dòng dưới mỗi ý.
-            5. Bắt đầu bằng: "Do hạn chế về bản quyền, đệ xin tóm lược ý chính:".
+            console.log("⚠️ Prompt Gốc bị chặn (Recitation). Chuyển sang chế độ trả Link an toàn...");
 
-            --- VĂN BẢN NGUỒN ---
-            ${contextString}`;
+            // 1. Câu thông báo cố định bạn yêu cầu
+            const msgSafe = "Do hệ thống AI có giới hạn về bản quyền và truy xuất dữ liệu Quốc Tế . Sư huynh có thể lặp lại câu hỏi vài lần để có được câu trả lời chính xác nhất . Sau đây là một số bài Khai Thị của Đài Trưởng mà đệ tìm được , mong rằng sẽ giúp ích được cho Sư huynh ạ !";
 
-            response = await callGeminiWithRetry({
-                contents: [{ parts: [{ text: promptDienGiai }] }],
-                safetySettings: safetySettings,
-                generationConfig: { temperature: 0.3, maxOutputTokens: 4096 }
-            }, 0);
+            // 2. Trích xuất danh sách Link từ dữ liệu tìm kiếm (documents)
+            // (Dùng Set để đảm bảo không bị trùng link)
+            const uniqueLinks = [...new Set(documents.map(doc => doc.url))];
+            
+            // 3. Tạo danh sách link (Mỗi link 1 dòng)
+            // Chỉ lấy tối đa 5 link để nhìn cho gọn
+            const listLinkString = uniqueLinks.slice(0, 5).map(url => `Link : ${url}`).join('\n');
 
-            if (response.data?.candidates?.[0]?.content?.parts?.[0]?.text) {
-                aiResponse = response.data.candidates[0].content.parts[0].text;
-            } else {
-                aiResponse = "Nội dung này Google chặn tuyệt đối. Sư huynh xem trực tiếp trên web ạ.";
+            // 4. Gán kết quả (Đây sẽ là nội dung trả về cuối cùng)
+            aiResponse = `${msgSafe}\n\n${listLinkString}`;
+            
+            // Gửi cảnh báo nhẹ về Telegram để admin biết bài này đang bị Google chặn bản quyền
+            if (typeof sendTelegramAlert === 'function') {
+                // Không await để không làm chậm phản hồi người dùng
+                sendTelegramAlert(`⚠️ <b>Recitation Blocked:</b>\nQuestion: ${fullQuestion}\n-> Đã trả về danh sách Link an toàn.`);
             }
         }
 
