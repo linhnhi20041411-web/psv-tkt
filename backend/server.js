@@ -18,20 +18,25 @@ const io = new Server(server, {
 
 // Biến lưu trữ tạm: Tin nhắn Telegram ID -> Socket ID người dùng
 const pendingRequests = new Map();
+const socketToMsgId = new Map();
 
+// Lắng nghe kết nối
 io.on('connection', (socket) => {
     console.log('👤 User Connected:', socket.id);
 
     socket.on('disconnect', () => {
-        console.log('User Disconnected:', socket.id);
         // Dọn dẹp bộ nhớ khi user thoát
         if (socketToMsgId.has(socket.id)) {
             const msgIds = socketToMsgId.get(socket.id);
-            msgIds.forEach(id => pendingRequests.delete(id));
+            // Xóa các request đang chờ của user này
+            if (msgIds) {
+                msgIds.forEach(id => pendingRequests.delete(id));
+            }
             socketToMsgId.delete(socket.id);
         }
     });
 });
+
 const PORT = process.env.PORT || 3001;
 
 app.use(express.json({ limit: '50mb' }));
@@ -348,17 +353,17 @@ app.post('/api/chat', async (req, res) => {
                 parse_mode: 'HTML'
             });
 
-            // 2. Lưu Socket ID vào bộ nhớ tạm
+            // 2. Lưu lại mối liên hệ
             if (teleRes.data && teleRes.data.result && socketId) {
                 const msgId = teleRes.data.result.message_id;
-                pendingRequests.set(msgId, socketId);
                 
-                // --- THÊM ĐOẠN NÀY ĐỂ DỌN DẸP ---
+                // Lưu xuôi
+                pendingRequests.set(msgId, socketId);
+
                 if (!socketToMsgId.has(socketId)) {
                     socketToMsgId.set(socketId, []);
                 }
                 socketToMsgId.get(socketId).push(msgId);
-                // -------------------------------
             }
 
             // 3. Trả về câu thông báo mặc định (Đã sửa chính tả giúp bạn: nát -> lát, huỳnh -> huynh)
