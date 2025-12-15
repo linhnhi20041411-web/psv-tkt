@@ -83,6 +83,17 @@ async function sendTelegramAlert(message) {
     } catch (error) { console.error("Telegram Error:", error.message); }
 }
 
+// Hàm thoát ký tự đặc biệt để tránh lỗi Telegram HTML
+function escapeHtml(text) {
+    if (!text) return "";
+    return text
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
 function cleanText(text) {
     if (!text) return "";
     let clean = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>/gi, '\n').replace(/<[^>]*>?/gm, '').replace(/&nbsp;/g, ' ');    
@@ -257,22 +268,18 @@ async function searchSupabaseContext(aiAnalysis) {
     }
 }
 
-// --- 8. API CHAT (BẢN TỐI ƯU KHỬ RÁC) ---
+// --- 8. API CHAT (BẢN SỬA LỖI 400 & AI QUÁ CẨN THẬN) ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // 1. Chuẩn hóa câu hỏi
         const fullQuestion = dichVietTat(question);
-        
-        // 2. AI Phân tích (Trả về JSON {search_query, must_have})
         const aiAnalysis = await aiExtractKeywords(fullQuestion);
         
-        // 3. Tìm kiếm với Bộ lọc khử rác
+        // Tìm kiếm với bộ lọc
         const documents = await searchSupabaseContext(aiAnalysis);
 
-        // Header & Footer cố định (Theo yêu cầu của bạn)
         const HEADER_MSG = "Đệ chào Sư huynh ! sau đây là tất cả các kết quả tìm kiếm đệ tìm được trong thư viện khai thị hiện tại . Mong rằng các kết quả sau đây sẽ mang lại lợi ích tới cho Sư huynh ạ !\n\n";
         const FOOTER_MSG = "\n\nSư huynh có thể tìm thêm các khai thị của Sư Phụ tại địa chỉ : https://tkt.pmtl.site/";
 
@@ -288,20 +295,24 @@ app.post('/api/chat', async (req, res) => {
                 contextString += `--- Bài #${index + 1} ---\nLink Gốc: ${doc.url}\nNội dung: ${doc.content.substring(0, 1500)}\n`;
             });
 
-            // Prompt Trả lời (Giữ nguyên yêu cầu không chào hỏi)
+            // --- PROMPT MỚI: QUYẾT LIỆT HƠN ---
+            // Bỏ quy tắc "Nếu không tìm thấy trả về NO_INFO" để tránh AI lười.
+            // Thay bằng: "Hãy cố gắng hết sức để trích xuất..."
             const systemPrompt = `
             NHIỆM VỤ: Trích xuất thông tin trả lời cho câu hỏi: "${fullQuestion}".
-            DỮ LIỆU:
+            
+            DỮ LIỆU THAM KHẢO (Đã được lọc là có chứa từ khóa liên quan):
             ${contextString}
 
-            YÊU CẦU TUYỆT ĐỐI:
-            1. Chỉ trả về nội dung tìm thấy dưới dạng gạch đầu dòng (-).
-            2. Dưới mỗi ý PHẢI CÓ link bài gốc ngay lập tức.
-            3. KHÔNG chào hỏi, KHÔNG kết luận.
-            4. Nếu dữ liệu không khớp câu hỏi, trả về: "NO_INFO".
+            YÊU CẦU:
+            1. Trích xuất tất cả các ý liên quan đến câu hỏi trong dữ liệu trên.
+            2. Trình bày dạng gạch đầu dòng (-).
+            3. Dưới mỗi ý PHẢI DÁN link bài gốc.
+            4. KHÔNG chào hỏi, KHÔNG kết luận.
+            5. Nếu dữ liệu thực sự hoàn toàn không liên quan (ví dụ nói về chủ đề khác hẳn), mới được trả về: "NO_INFO".
             
             Mẫu:
-            - Ý chính tìm được...
+            - Nội dung A...
             Link: [URL]
             `;
 
@@ -312,12 +323,18 @@ app.post('/api/chat', async (req, res) => {
             if (aiResponse.includes("NO_INFO")) needHumanSupport = true;
         }
 
-        // Xử lý khi không tìm thấy
+        // --- XỬ LÝ KẾT QUẢ ---
         if (needHumanSupport) {
             console.log("⚠️ Không tìm thấy -> Chuyển Telegram.");
+
+            // Xử lý chuỗi JSON an toàn trước khi gửi Telegram
+            const safeAIKey = escapeHtml(JSON.stringify(aiAnalysis, null, 2)); 
+            const safeUserQ = escapeHtml(question);
+
             const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
                 chat_id: process.env.TELEGRAM_CHAT_ID,
-                text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\n\nUser: "${question}"\nAI Key: ${JSON.stringify(aiAnalysis)}\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
+                // Dùng thẻ <pre> cho code để Telegram không bị lỗi format
+                text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\n\nUser: ${safeUserQ}\n\nAI Key:\n<pre>${safeAIKey}</pre>\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
                 parse_mode: 'HTML'
             });
 
@@ -333,12 +350,12 @@ app.post('/api/chat', async (req, res) => {
             });
         }
 
-        // Trả về kết quả sạch sẽ
         let cleanBody = aiResponse.replace(/^Output:\s*/i, "").replace(/```/g, "").trim();
         res.json({ answer: HEADER_MSG + cleanBody + FOOTER_MSG });
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
+        // Tạm thời tắt gửi lỗi Telegram ở đây để tránh lặp vô tận nếu chính Telegram bị lỗi
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
