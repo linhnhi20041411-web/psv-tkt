@@ -89,6 +89,17 @@ async function sendTelegramAlert(message) {
     } catch (error) { console.error("Telegram Error:", error.message); }
 }
 
+// --- HÀM KHẮC PHỤC LỖI ESCAPEHTML ---
+function escapeHtml(text) {
+    if (!text) return "";
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
 function cleanText(text) {
     if (!text) return "";
     let clean = text.replace(/<br\s*\/?>/gi, '\n')
