@@ -13,6 +13,8 @@ const app = express();
 
 // --- KHỞI TẠO SERVER & SOCKET ---
 const server = http.createServer(app); 
+const allowedOrigins = ["https://psvtkt.pmtl.site"]; // Thêm các domain của bạn
+app.use(cors({ origin: allowedOrigins }));
 const io = new Server(server, {
     cors: { origin: "*" } 
 });
@@ -131,23 +133,44 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- AI EXTRACT KEYWORDS (Cực kỳ đơn giản để giữ nguyên từ gốc) ---
+// --- 6. AI PHÂN TÍCH TỪ KHÓA (CHIA LÀM 2 LOẠI: VECTOR VÀ BẮT BUỘC) ---
 async function aiExtractKeywords(userQuestion) {
     const prompt = `
-    Nhiệm vụ: Trích xuất các danh từ và động từ chính từ câu hỏi.
-    Yêu cầu:
-    1. Giữ nguyên các thuật ngữ Phật pháp (Lễ Phật Đại Sám Hối Văn, Chú Đại Bi...).
-    2. Bỏ các từ đệm vô nghĩa.
-    3. KHÔNG THÊM từ "Quy định", "Luật".
-    
+    Nhiệm vụ: Phân tích câu hỏi tìm kiếm dữ liệu Phật giáo.
     Input: "${userQuestion}"
-    Output:
+    
+    YÊU CẦU TRẢ VỀ JSON (Không markdown):
+    {
+        "search_query": "Câu hỏi được viết lại ngắn gọn để tìm Vector",
+        "must_have": ["Từ khóa 1", "Từ khóa 2"] 
+    }
+
+    QUY TẮC must_have (TỪ KHÓA BẮT BUỘC):
+    1. Chọn danh từ cụ thể nhất (Ví dụ: "Trẻ em", "Thai phụ", "Ăn mặn").
+    2. Chọn tên kinh cụ thể (Ví dụ: "Lễ Phật Đại Sám Hối Văn", "Chú Đại Bi").
+    3. KHÔNG chọn từ chung chung (như: niệm, tụng, là gì, sao, thế nào).
+    4. Nếu không có từ khóa đặc biệt, để mảng rỗng [].
+
+    VÍ DỤ:
+    - In: "Trẻ em niệm lpdshv cần chú ý gì"
+    - Out: {"search_query": "lưu ý trẻ em tụng Lễ Phật Đại Sám Hối Văn", "must_have": ["trẻ em", "Lễ Phật Đại Sám Hối Văn"]}
     `;
+
     try {
         const startIndex = getRandomStartIndex();
-        const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, startIndex);
-        return response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim().replace(/\n/g, " ") || userQuestion;
-    } catch (e) { return userQuestion; }
+        // Gọi AI và ép trả về JSON
+        const response = await callGeminiWithRetry({ 
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: "application/json" } // Ép trả về JSON chuẩn
+        }, startIndex);
+        
+        const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        return JSON.parse(text); 
+    } catch (e) {
+        console.error("Lỗi AI Extract:", e.message);
+        // Fallback nếu AI lỗi
+        return { search_query: userQuestion, must_have: [] };
+    }
 }
 
 // --- EMBEDDING ---
@@ -165,45 +188,68 @@ async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- TÌM KIẾM DỮ LIỆU (Tăng giới hạn lên 10 để lấy "Tất cả") ---
-async function searchSupabaseContext(fullText, keywords) {
+// --- 7. TÌM KIẾM & SÀNG LỌC (RERANKING LOGIC) ---
+async function searchSupabaseContext(aiAnalysis) {
     try {
-        console.log(`🔎 Vector: "${fullText}" | Keyword: "${keywords}"`);
-        
-        // 1. Tìm theo Từ khóa (Text Search)
-        const { data: textMatches } = await supabase
-            .from('vn_buddhism_content')
-            .select('*')
-            .or(`content.ilike.%${keywords}%, metadata->>title.ilike.%${keywords}%`) 
-            .limit(10); // Tăng lên 10 kết quả
+        const { search_query, must_have } = aiAnalysis;
+        console.log(`🔎 Tìm: "${search_query}" | Bắt buộc có: [${must_have.join(', ')}]`);
 
-        // 2. Tìm theo Vector (Semantic Search)
+        // 1. TẠO VECTOR TỪ CÂU HỎI NGẮN GỌN
         const startIndex = getRandomStartIndex();
-        const queryVector = await callEmbeddingWithRetry(fullText, startIndex);
+        const queryVector = await callEmbeddingWithRetry(search_query, startIndex);
 
-        const { data: vectorMatches, error: vectorError } = await supabase.rpc('hybrid_search', {
-            query_text: keywords, 
+        // 2. GỌI DATABASE (Lấy số lượng lớn - 50 kết quả để tha hồ lọc)
+        const { data: rawDocs, error } = await supabase.rpc('hybrid_search', {
+            query_text: search_query, 
             query_embedding: queryVector, 
-            match_count: 30, 
+            match_count: 50, // Lấy nhiều để lọc dần
             rrf_k: 60
         });
 
-        if (vectorError) throw vectorError;
+        if (error) throw error;
+        if (!rawDocs || rawDocs.length === 0) return null;
 
-        // Gộp và lọc trùng
-        const allDocs = [];
+        // 3. BỘ LỌC KHỬ RÁC (JAVASCRIPT FILTER)
+        // Logic: Bài viết phải chứa TẤT CẢ các từ trong 'must_have'
+        
+        let filteredDocs = rawDocs.filter(doc => {
+            const contentLower = (doc.content + " " + (doc.metadata?.title || "")).toLowerCase();
+            // Kiểm tra xem bài này có chứa mọi từ khóa bắt buộc không
+            const hasAllKeywords = must_have.every(kw => contentLower.includes(kw.toLowerCase()));
+            return hasAllKeywords;
+        });
+
+        console.log(`🧹 Lọc rác: Tìm thấy ${rawDocs.length} -> Giữ lại ${filteredDocs.length} bài khớp từ khóa.`);
+
+        // 4. FALLBACK (DỰ PHÒNG)
+        // Nếu lọc kỹ quá mà mất hết bài (0 kết quả), thì nới lỏng: Chỉ cần khớp 1 từ khóa quan trọng nhất
+        if (filteredDocs.length === 0 && must_have.length > 0) {
+            console.log("⚠️ Lọc kỹ quá mất hết bài, thử nới lỏng...");
+            filteredDocs = rawDocs.filter(doc => {
+                const contentLower = (doc.content + " " + (doc.metadata?.title || "")).toLowerCase();
+                return contentLower.includes(must_have[0].toLowerCase());
+            });
+        }
+
+        // Nếu vẫn không có, thì đành lấy top 3 kết quả Vector tốt nhất (thà có còn hơn không)
+        if (filteredDocs.length === 0) {
+            filteredDocs = rawDocs.slice(0, 3);
+        }
+
+        // 5. TRẢ VỀ TOP 5 KẾT QUẢ TỐT NHẤT SAU KHI LỌC
+        // Lọc trùng URL trước khi trả về
+        const uniqueDocs = [];
         const seenUrls = new Set();
-        const addDoc = (doc) => {
+        
+        for (const doc of filteredDocs) {
             if (!seenUrls.has(doc.url)) {
                 seenUrls.add(doc.url);
-                allDocs.push(doc);
+                uniqueDocs.push(doc);
+                if (uniqueDocs.length >= 5) break; // Chỉ lấy tối đa 5 bài
             }
-        };
+        }
 
-        if (textMatches) textMatches.forEach(addDoc);
-        if (vectorMatches) vectorMatches.forEach(addDoc);
-
-        return allDocs.length > 0 ? allDocs : null;
+        return uniqueDocs.length > 0 ? uniqueDocs : null;
 
     } catch (error) {
         console.error("Lỗi tìm kiếm:", error.message);
@@ -211,21 +257,22 @@ async function searchSupabaseContext(fullText, keywords) {
     }
 }
 
-// --- API CHAT (LOGIC MỚI: ĐÚNG KHUÔN MẪU) ---
+// --- 8. API CHAT (BẢN TỐI ƯU KHỬ RÁC) ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { question, socketId } = req.body; 
         if (!question) return res.status(400).json({ error: 'Thiếu câu hỏi.' });
 
-        // 1. Xử lý câu hỏi
+        // 1. Chuẩn hóa câu hỏi
         const fullQuestion = dichVietTat(question);
-        const searchKeywords = await aiExtractKeywords(fullQuestion);
-        console.log(`🗣️ User: "${question}" -> Key: "${searchKeywords}"`);
+        
+        // 2. AI Phân tích (Trả về JSON {search_query, must_have})
+        const aiAnalysis = await aiExtractKeywords(fullQuestion);
+        
+        // 3. Tìm kiếm với Bộ lọc khử rác
+        const documents = await searchSupabaseContext(aiAnalysis);
 
-        // 2. Tìm kiếm (Dùng cả câu hỏi và từ khóa)
-        const documents = await searchSupabaseContext(fullQuestion, searchKeywords);
-
-        // 3. Chuẩn bị 2 câu "Thần chú" (Header & Footer)
+        // Header & Footer cố định (Theo yêu cầu của bạn)
         const HEADER_MSG = "Đệ chào Sư huynh ! sau đây là tất cả các kết quả tìm kiếm đệ tìm được trong thư viện khai thị hiện tại . Mong rằng các kết quả sau đây sẽ mang lại lợi ích tới cho Sư huynh ạ !\n\n";
         const FOOTER_MSG = "\n\nSư huynh có thể tìm thêm các khai thị của Sư Phụ tại địa chỉ : https://tkt.pmtl.site/";
 
@@ -235,53 +282,42 @@ app.post('/api/chat', async (req, res) => {
         if (!documents || documents.length === 0) {
             needHumanSupport = true;
         } else {
-            // Chuẩn bị dữ liệu cho AI đọc
+            // Chuẩn bị dữ liệu
             let contextString = "";
             documents.forEach((doc, index) => {
-                contextString += `--- Bài #${index + 1} ---\nLink Gốc: ${doc.url}\nNội dung trích: ${doc.content.substring(0, 1500)}\n`;
+                contextString += `--- Bài #${index + 1} ---\nLink Gốc: ${doc.url}\nNội dung: ${doc.content.substring(0, 1500)}\n`;
             });
 
-            // --- PROMPT "KỶ LUẬT SẮT" ---
+            // Prompt Trả lời (Giữ nguyên yêu cầu không chào hỏi)
             const systemPrompt = `
-            NHIỆM VỤ: Bạn là một công cụ trích xuất thông tin.
-            ĐẦU VÀO: 
-            - Câu hỏi: "${fullQuestion}"
-            - Dữ liệu tham khảo:
+            NHIỆM VỤ: Trích xuất thông tin trả lời cho câu hỏi: "${fullQuestion}".
+            DỮ LIỆU:
             ${contextString}
 
-            YÊU CẦU ĐẦU RA (BẮT BUỘC TUÂN THỦ TUYỆT ĐỐI):
-            1. Tìm tất cả thông tin liên quan đến từ khóa trong câu hỏi.
-            2. Trình bày dưới dạng các gạch đầu dòng (-).
-            3. Ngay bên dưới mỗi gạch đầu dòng nội dung, BẮT BUỘC phải dán Link Gốc của thông tin đó.
-            4. TUYỆT ĐỐI KHÔNG được viết lời chào (như "Chào bạn", "Thân gửi").
-            5. TUYỆT ĐỐI KHÔNG được viết lời kết (như "Hy vọng giúp ích").
-            6. Nếu không tìm thấy thông tin nào liên quan, chỉ trả về duy nhất chữ: "NO_INFO".
-
-            MẪU TRÌNH BÀY MONG MUỐN:
-            - Nội dung tìm thấy A...
-            Link: [Link của bài A]
-
-            - Nội dung tìm thấy B...
-            Link: [Link của bài B]
+            YÊU CẦU TUYỆT ĐỐI:
+            1. Chỉ trả về nội dung tìm thấy dưới dạng gạch đầu dòng (-).
+            2. Dưới mỗi ý PHẢI CÓ link bài gốc ngay lập tức.
+            3. KHÔNG chào hỏi, KHÔNG kết luận.
+            4. Nếu dữ liệu không khớp câu hỏi, trả về: "NO_INFO".
+            
+            Mẫu:
+            - Ý chính tìm được...
+            Link: [URL]
             `;
 
             const startIndex = getRandomStartIndex();
             const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
-
             aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_INFO";
             
-            if (aiResponse.includes("NO_INFO")) {
-                needHumanSupport = true;
-            }
+            if (aiResponse.includes("NO_INFO")) needHumanSupport = true;
         }
 
-        // --- XỬ LÝ KẾT QUẢ ---
+        // Xử lý khi không tìm thấy
         if (needHumanSupport) {
             console.log("⚠️ Không tìm thấy -> Chuyển Telegram.");
-
             const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
                 chat_id: process.env.TELEGRAM_CHAT_ID,
-                text: `❓ <b>CÂU HỎI CẦN HỖ TRỢ</b>\n\n"${question}"\n\n👉 <i>Admin hãy Reply tin nhắn này để trả lời.</i>`,
+                text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\n\nUser: "${question}"\nAI Key: ${JSON.stringify(aiAnalysis)}\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
                 parse_mode: 'HTML'
             });
 
@@ -297,18 +333,12 @@ app.post('/api/chat', async (req, res) => {
             });
         }
 
-        // LÀM SẠCH VÀ GHÉP CHUỖI (Đảm bảo đúng khuôn mẫu)
-        // 1. Xóa các dấu Markdown thừa nếu có
-        let cleanBody = aiResponse.replace(/^Output:\s*/i, "").trim();
-        
-        // 2. Ghép Đầu + Thân + Đuôi
-        const finalMessage = HEADER_MSG + cleanBody + FOOTER_MSG;
-
-        res.json({ answer: finalMessage });
+        // Trả về kết quả sạch sẽ
+        let cleanBody = aiResponse.replace(/^Output:\s*/i, "").replace(/```/g, "").trim();
+        res.json({ answer: HEADER_MSG + cleanBody + FOOTER_MSG });
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
-        await sendTelegramAlert(`❌ LỖI API CHAT:\nUser: ${req.body.question}\nError: ${error.message}`);
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
