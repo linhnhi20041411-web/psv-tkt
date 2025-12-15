@@ -13,10 +13,7 @@ const app = express();
 
 // --- KHỞI TẠO SERVER & SOCKET ---
 const server = http.createServer(app); 
-
-// SỬA Ở ĐÂY: Cho phép mọi nguồn kết nối để tránh lỗi CORS khi dùng Admin
-app.use(cors()); 
-
+app.use(cors()); // Mở khóa CORS cho mọi nguồn
 const io = new Server(server, {
     cors: { origin: "*" } 
 });
@@ -38,7 +35,6 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3001;
 app.use(express.json({ limit: '50mb' }));
-// app.use(cors()); // Đã khai báo ở trên rồi, dòng này thừa nhưng để cũng không sao
 
 // --- CẤU HÌNH ---
 const rawKeys = process.env.GEMINI_API_KEYS || "";
@@ -77,23 +73,23 @@ function dichVietTat(text) {
 function getRandomStartIndex() { return Math.floor(Math.random() * apiKeys.length); }
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Hàm thoát ký tự đặc biệt ĐỂ TRÁNH LỖI 400 TELEGRAM
+function escapeHtml(text) {
+    if (!text) return "";
+    return String(text)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
 async function sendTelegramAlert(message) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
         await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>PSV ẢO</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
     } catch (error) { console.error("Telegram Error:", error.message); }
-}
-
-// Hàm thoát ký tự đặc biệt để tránh lỗi Telegram HTML
-function escapeHtml(text) {
-    if (!text) return "";
-    return text
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;")
-        .replace(/"/g, "&quot;")
-        .replace(/'/g, "&#039;");
 }
 
 function cleanText(text) {
@@ -146,7 +142,7 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
     }
 }
 
-// --- 6. AI PHÂN TÍCH TỪ KHÓA (CHIA LÀM 2 LOẠI: VECTOR VÀ BẮT BUỘC) ---
+// --- 6. AI PHÂN TÍCH TỪ KHÓA ---
 async function aiExtractKeywords(userQuestion) {
     const prompt = `
     Nhiệm vụ: Phân tích câu hỏi tìm kiếm dữ liệu Phật giáo.
@@ -171,17 +167,15 @@ async function aiExtractKeywords(userQuestion) {
 
     try {
         const startIndex = getRandomStartIndex();
-        // Gọi AI và ép trả về JSON
         const response = await callGeminiWithRetry({ 
             contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: "application/json" } // Ép trả về JSON chuẩn
+            generationConfig: { responseMimeType: "application/json" } 
         }, startIndex);
         
         const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         return JSON.parse(text); 
     } catch (e) {
         console.error("Lỗi AI Extract:", e.message);
-        // Fallback nếu AI lỗi
         return { search_query: userQuestion, must_have: [] };
     }
 }
@@ -207,35 +201,31 @@ async function searchSupabaseContext(aiAnalysis) {
         const { search_query, must_have } = aiAnalysis;
         console.log(`🔎 Tìm: "${search_query}" | Bắt buộc có: [${must_have.join(', ')}]`);
 
-        // 1. TẠO VECTOR TỪ CÂU HỎI NGẮN GỌN
+        // 1. TẠO VECTOR
         const startIndex = getRandomStartIndex();
         const queryVector = await callEmbeddingWithRetry(search_query, startIndex);
 
-        // 2. GỌI DATABASE (Lấy số lượng lớn - 50 kết quả để tha hồ lọc)
+        // 2. GỌI DATABASE (Lấy 50 bài)
         const { data: rawDocs, error } = await supabase.rpc('hybrid_search', {
             query_text: search_query, 
             query_embedding: queryVector, 
-            match_count: 50, // Lấy nhiều để lọc dần
+            match_count: 50, 
             rrf_k: 60
         });
 
         if (error) throw error;
         if (!rawDocs || rawDocs.length === 0) return null;
 
-        // 3. BỘ LỌC KHỬ RÁC (JAVASCRIPT FILTER)
-        // Logic: Bài viết phải chứa TẤT CẢ các từ trong 'must_have'
-        
+        // 3. BỘ LỌC KHỬ RÁC
         let filteredDocs = rawDocs.filter(doc => {
             const contentLower = (doc.content + " " + (doc.metadata?.title || "")).toLowerCase();
-            // Kiểm tra xem bài này có chứa mọi từ khóa bắt buộc không
             const hasAllKeywords = must_have.every(kw => contentLower.includes(kw.toLowerCase()));
             return hasAllKeywords;
         });
 
         console.log(`🧹 Lọc rác: Tìm thấy ${rawDocs.length} -> Giữ lại ${filteredDocs.length} bài khớp từ khóa.`);
 
-        // 4. FALLBACK (DỰ PHÒNG)
-        // Nếu lọc kỹ quá mà mất hết bài (0 kết quả), thì nới lỏng: Chỉ cần khớp 1 từ khóa quan trọng nhất
+        // 4. FALLBACK
         if (filteredDocs.length === 0 && must_have.length > 0) {
             console.log("⚠️ Lọc kỹ quá mất hết bài, thử nới lỏng...");
             filteredDocs = rawDocs.filter(doc => {
@@ -244,13 +234,11 @@ async function searchSupabaseContext(aiAnalysis) {
             });
         }
 
-        // Nếu vẫn không có, thì đành lấy top 3 kết quả Vector tốt nhất (thà có còn hơn không)
         if (filteredDocs.length === 0) {
             filteredDocs = rawDocs.slice(0, 3);
         }
 
-        // 5. TRẢ VỀ TOP 5 KẾT QUẢ TỐT NHẤT SAU KHI LỌC
-        // Lọc trùng URL trước khi trả về
+        // 5. TRẢ VỀ TOP 5
         const uniqueDocs = [];
         const seenUrls = new Set();
         
@@ -258,7 +246,7 @@ async function searchSupabaseContext(aiAnalysis) {
             if (!seenUrls.has(doc.url)) {
                 seenUrls.add(doc.url);
                 uniqueDocs.push(doc);
-                if (uniqueDocs.length >= 5) break; // Chỉ lấy tối đa 5 bài
+                if (uniqueDocs.length >= 5) break; 
             }
         }
 
@@ -270,7 +258,7 @@ async function searchSupabaseContext(aiAnalysis) {
     }
 }
 
-// --- 8. API CHAT (BẢN SỬA LỖI 400 & AI QUÁ CẨN THẬN) ---
+// --- 8. API CHAT (BẢN FIX LỖI 400 BAD REQUEST) ---
 app.post('/api/chat', async (req, res) => {
     try {
         const { question, socketId } = req.body; 
@@ -298,8 +286,6 @@ app.post('/api/chat', async (req, res) => {
             });
 
             // --- PROMPT MỚI: QUYẾT LIỆT HƠN ---
-            // Bỏ quy tắc "Nếu không tìm thấy trả về NO_INFO" để tránh AI lười.
-            // Thay bằng: "Hãy cố gắng hết sức để trích xuất..."
             const systemPrompt = `
             NHIỆM VỤ: Trích xuất thông tin trả lời cho câu hỏi: "${fullQuestion}".
             
@@ -329,14 +315,13 @@ app.post('/api/chat', async (req, res) => {
         if (needHumanSupport) {
             console.log("⚠️ Không tìm thấy -> Chuyển Telegram.");
 
-            // Xử lý chuỗi JSON an toàn trước khi gửi Telegram
-            const safeAIKey = escapeHtml(JSON.stringify(aiAnalysis, null, 2)); 
+            // FIX LỖI 400 Ở ĐÂY: Xử lý ký tự đặc biệt thật kỹ
             const safeUserQ = escapeHtml(question);
 
             const teleRes = await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
                 chat_id: process.env.TELEGRAM_CHAT_ID,
-                // Dùng thẻ <pre> cho code để Telegram không bị lỗi format
-                text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\n\nUser: ${safeUserQ}\n\nAI Key:\n<pre>${safeAIKey}</pre>\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
+                // Đã bỏ phần JSON phức tạp, chỉ gửi câu hỏi để tránh lỗi định dạng
+                text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\n\nUser: ${safeUserQ}\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
                 parse_mode: 'HTML'
             });
 
@@ -357,7 +342,7 @@ app.post('/api/chat', async (req, res) => {
 
     } catch (error) {
         console.error("Lỗi Chat Server:", error.message);
-        // Tạm thời tắt gửi lỗi Telegram ở đây để tránh lặp vô tận nếu chính Telegram bị lỗi
+        // Tạm thời tắt gửi lỗi Telegram ở đây để tránh lặp vô tận nếu chính Telegram bị lỗi 400
         res.status(500).json({ error: "Lỗi hệ thống: " + error.message });
     }
 });
@@ -392,7 +377,7 @@ app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res)
     } catch (e) { console.error(e); res.sendStatus(500); }
 });
 
-// --- CÁC API ADMIN (GIỮ NGUYÊN - ĐÃ TẮT THÔNG BÁO) ---
+// --- CÁC API ADMIN (GIỮ NGUYÊN) ---
 
 app.post('/api/admin/sync-blogger', async (req, res) => {
     const { password, blogUrl } = req.body;
