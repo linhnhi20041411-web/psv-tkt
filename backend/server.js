@@ -103,11 +103,11 @@ function chunkText(text, maxChunkSize = 2000) {
         if ((currentChunk.length + cleanP.length) < maxChunkSize) { 
             currentChunk += (currentChunk ? "\n\n" : "") + cleanP; 
         } else { 
-            if (currentChunk.length > 50) chunks.push(currentChunk); 
+            if (currentChunk.length > 100) chunks.push(currentChunk); 
             currentChunk = cleanP; 
         }
     }
-    if (currentChunk.length > 50) chunks.push(currentChunk);
+    if (currentChunk.length > 100) chunks.push(currentChunk);
     return chunks;
 }
 
@@ -342,7 +342,7 @@ app.post('/api/chat', async (req, res) => {
             
             Mẫu:
             - Nội dung A...
-            Link: [URL]
+             https://...
             `;
 
             const startIndex = getRandomStartIndex();
@@ -360,7 +360,7 @@ app.post('/api/chat', async (req, res) => {
             // Lưu Socket ID để admin reply được (kể cả khi không tìm thấy)
             // (Logic này tùy chọn, nếu bạn muốn admin chat lại được với case này thì thêm vào pendingRequests giống phần @psv)
 
-            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Đệ đã chuyển câu hỏi đến Admin để hỗ trợ thêm. Mời Sư huynh tra cứu thêm tại mục lục tổng quan: https://mucluc.pmtl.site" });
+            return res.json({ answer: "Đệ tìm trong dữ liệu không thấy thông tin này. Đệ đã chuyển câu hỏi đến PSV để được hỗ trợ thêm. Trong lúc chờ đợi Sư huynh có thể tra cứu thêm tại : https://tkt.pmtl.site " });
         }
 
         let cleanBody = aiResponse.replace(/^Output:\s*/i, "").replace(/```/g, "").trim();
