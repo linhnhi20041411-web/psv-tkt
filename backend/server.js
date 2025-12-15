@@ -130,11 +130,25 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 
 // --- 5. AI EXTRACT & EMBEDDING ---
 async function aiExtractKeywords(userQuestion) {
-    // Dùng prompt đơn giản để lấy từ khóa tìm kiếm trước
-    const prompt = `Trích xuất từ khóa tìm kiếm chính (bỏ từ hư từ) cho câu: "${userQuestion}"`;
+    const prompt = `
+    Nhiệm vụ: Trích xuất CỤM TỪ KHÓA CHÍNH trong câu hỏi để tìm kiếm trong Tiêu đề bài viết.
+    Quy tắc:
+    1. Bỏ từ giao tiếp (đệ, muốn, sư phụ, khai thị, có không...).
+    2. Giữ lại cụm danh từ/động từ đặc thù nhất.
+    3. KHÔNG thêm từ mới, chỉ cắt bớt từ câu gốc.
+    
+    Ví dụ: 
+    - "đệ muốn mở nhà hàng chay" -> mở nhà hàng chay
+    - "làm sao để phóng sinh đúng pháp" -> phóng sinh đúng pháp
+    
+    Input: "${userQuestion}"
+    Output:`;
+    
     try {
         const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, getRandomStartIndex());
-        return response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
+        let keywords = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
+        // Xóa dấu ngoặc kép nếu AI lỡ thêm vào
+        return keywords.replace(/["']/g, "");
     } catch (e) { return userQuestion; }
 }
 
@@ -152,15 +166,69 @@ async function callEmbeddingWithRetry(text, keyIndex = 0, retryCount = 0) {
     }
 }
 
+// --- 5. HÀM TÌM KIẾM THÔNG MINH (TITLE PRIORITY + VECTOR) ---
 async function searchSupabaseContext(query) {
     try {
-        const queryVector = await callEmbeddingWithRetry(query, getRandomStartIndex());
-        const { data, error } = await supabase.rpc('hybrid_search', {
-            query_text: query, query_embedding: queryVector, match_count: 30, rrf_k: 60
+        console.log(`🔎 Đang tìm kiếm: "${query}"`);
+        
+        // --- CHIẾN THUẬT 1: TÌM TRONG TIÊU ĐỀ (TEXT SEARCH) ---
+        // Ưu tiên tuyệt đối các bài có tiêu đề khớp với từ khóa
+        // Ví dụ: query="mở nhà hàng" -> Khớp ngay bài "Vấn đề mở nhà hàng chay"
+        const { data: titleMatches, error: titleError } = await supabase
+            .from('vn_buddhism_content')
+            .select('*')
+            .textSearch('fts', `'${query}'`, { config: 'english', type: 'websearch' }) // Hoặc dùng .ilike nếu cột metadata->>title có index
+            // Cách đơn giản nhất nếu chưa cấu hình FTS phức tạp là dùng ilike trên metadata
+            // Dưới đây mình dùng ilike cho đơn giản và hiệu quả với tiếng Việt không dấu/có dấu
+            .ilike('content', `%Tiêu đề: %${query}%`) 
+            .limit(5); // Lấy 5 bài khớp tiêu đề nhất
+
+        // --- CHIẾN THUẬT 2: TÌM THEO VECTOR (SEMANTIC SEARCH) ---
+        const startIndex = getRandomStartIndex();
+        const queryVector = await callEmbeddingWithRetry(query, startIndex);
+
+        const { data: vectorMatches, error: vectorError } = await supabase.rpc('hybrid_search', {
+            query_text: query,
+            query_embedding: queryVector,
+            match_count: 30, // Lấy 30 bài liên quan
+            rrf_k: 60
         });
-        if (error) throw error;
-        return data && data.length > 0 ? data : null;
-    } catch (error) { console.error("Lỗi tìm kiếm:", error.message); return null; }
+
+        if (vectorError) throw vectorError;
+
+        // --- GỘP KẾT QUẢ (MERGE & DEDUPLICATE) ---
+        // Nguyên tắc: Bài khớp Tiêu đề (Chiến thuật 1) phải đứng đầu danh sách
+        
+        const allDocs = [];
+        const seenUrls = new Set();
+
+        // 1. Đưa kết quả khớp Tiêu đề vào trước
+        if (titleMatches && titleMatches.length > 0) {
+            console.log(`✅ Tìm thấy ${titleMatches.length} bài khớp tiêu đề.`);
+            titleMatches.forEach(doc => {
+                if (!seenUrls.has(doc.url)) {
+                    seenUrls.add(doc.url);
+                    allDocs.push(doc);
+                }
+            });
+        }
+
+        // 2. Đưa kết quả Vector vào sau
+        if (vectorMatches && vectorMatches.length > 0) {
+            vectorMatches.forEach(doc => {
+                if (!seenUrls.has(doc.url)) {
+                    seenUrls.add(doc.url);
+                    allDocs.push(doc);
+                }
+            });
+        }
+
+        return allDocs.length > 0 ? allDocs : null;
+
+    } catch (error) {
+        console.error("Lỗi tìm kiếm:", error.message);
+        return null; 
+    }
 }
 
 // --- 6. API CHAT (KẾT HỢP LOGIC CỦA BẠN VÀO ĐÂY) ---
