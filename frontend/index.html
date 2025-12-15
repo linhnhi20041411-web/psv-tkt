@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Phụng Sự Viên Ảo "Văn-Tư-Tu"</title>
-    <link rel="icon" href="logo.png" type="image/png">
+    <link rel="icon" href="logo.png" type="image/png"> 
     <script src="https://cdn.tailwindcss.com"></script> 
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Quicksand:wght@400;500;700&display=swap" rel="stylesheet">
@@ -34,12 +35,12 @@
             background: #8D6E63; 
         }
         .message-bubble p {
-            font-size: 18px;
+            font-size: 16px; /* Giảm size chút cho mobile dễ nhìn */
             line-height: 1.6;
-            word-break: break-word; /* Để link dài không làm vỡ layout */
+            word-break: break-word; 
         }
         
-        /* Link thường trong văn bản (nếu có) */
+        /* Link thường */
         .message-bubble a:not([class*="tiny-btn"]) {
             color: #2563eb !important;
             text-decoration: underline !important;
@@ -58,18 +59,15 @@
             font-style: italic !important;
         }
 
-        /* --- STYLE NÚT ĐỌC BÀI GỐC (ĐÃ CHỈNH THEO Ý BẠN) --- */
+        /* --- STYLE NÚT ĐỌC BÀI GỐC --- */
         .tiny-btn {
             display: inline-block;
             margin-top: 8px;
             margin-bottom: 4px;
-            
-            /* SỬA LẠI MÀU NÚT CHO NỔI TRÊN NỀN NÂU ĐỎ */
-            background-color: #f59e0b; /* Màu Cam Vàng (Amber-500) */
-            color: #451a03 !important; /* Chữ Nâu Đậm */
-            
-            padding: 6px 16px;     
-            border-radius: 20px;   
+            background-color: #f59e0b; /* Amber-500 */
+            color: #451a03 !important; /* Nâu Đậm */
+            padding: 6px 16px;      
+            border-radius: 20px;    
             font-size: 13px;        
             font-weight: bold;
             text-decoration: none !important;
@@ -79,7 +77,7 @@
         }
         
         .tiny-btn:hover {
-            background-color: #fbbf24; /* Sáng hơn khi di chuột */
+            background-color: #fbbf24; 
             color: #000000 !important;
             transform: translateY(-1px);
         }
@@ -91,7 +89,7 @@
         
         <div class="text-center py-4 border-b border-stone-200 shadow-sm flex-shrink-0">
             <h1 class="font-title text-2xl md:text-3xl font-bold text-amber-800">Phụng Sự Viên Ảo "Văn-Tư-Tu"</h1>
-            <p class="text-stone-500 text-sm mt-1">Pháp Môn Tâm Linh 心靈法門 (<a href="https://nhomcongtu.pmtl.site" target="_blank">nhomcongtu.pmtl.site</a>)</p>
+            <p class="text-stone-500 text-sm mt-1">Pháp Môn Tâm Linh 心靈法門 (<a href="https://nhomcongtu.pmtl.site" target="_blank" class="text-blue-600 hover:underline">nhomcongtu.pmtl.site</a>)</p>
         </div>
 
         <div id="chat-messages" class="flex-1 p-4 md:p-6 overflow-y-auto bg-stone-50">
@@ -99,7 +97,7 @@
 
         <div class="p-4 bg-white border-t border-stone-200 shadow-inner flex-shrink-0">
             <div class="flex items-center bg-stone-100 rounded-full p-2">
-                <input type="text" id="user-input" placeholder="Đang chuẩn bị..." class="flex-1 bg-transparent px-4 py-2 text-stone-700 text-lg focus:outline-none" autocomplete="off" disabled>
+                <input type="text" id="user-input" placeholder="Đang kết nối máy chủ..." class="flex-1 bg-transparent px-4 py-2 text-stone-700 text-lg focus:outline-none" autocomplete="off" disabled>
                 <button id="send-button" class="bg-amber-700 hover:bg-amber-800 text-white w-12 h-12 rounded-full transition duration-300 flex items-center justify-center disabled:opacity-50 disabled:bg-stone-400 flex-shrink-0">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"></path><path d="M22 2L15 22l-4-9-9-4 22-2z"></path></svg>
                 </button>
@@ -108,169 +106,185 @@
     </div>
 
     <script>
-        // --- SỬA LỖI CHIỀU CAO TRÊN MOBILE ---
-        const setAppHeight = () => {
-            document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
-        }
-        window.addEventListener('resize', setAppHeight);
-        setAppHeight();
-        // --- KẾT THÚC SỬA LỖI ---
+    // ==========================================================
+    // 1. CẤU HÌNH SERVER (Thay link Render của bạn vào đây)
+    // ==========================================================
+    const BACKEND_API_URL = "https://psv-tkt.onrender.com"; 
+    // Lưu ý: Không có dấu gạch chéo / ở cuối
 
-        // === THÔNG TIN CẤU HÌNH ===
-        const BACKEND_API_URL = "https://psv-tkt.onrender.com"; 
+    const chatMessages = document.getElementById('chat-messages');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.getElementById('send-button');
+    let mySocketId = "";
+
+    // ==========================================================
+    // 2. KẾT NỐI SOCKET (Real-time)
+    // ==========================================================
+    const socket = io(BACKEND_API_URL); 
+    
+    socket.on("connect", () => {
+        mySocketId = socket.id; 
+        console.log("✅ Đã kết nối Socket:", mySocketId);
+        userInput.disabled = false;
+        userInput.placeholder = "Nhập câu hỏi của Sư huynh tại đây ạ...";
+    });
+    
+    socket.on("disconnect", () => {
+        console.log("❌ Mất kết nối Socket");
+        userInput.placeholder = "Đang kết nối lại...";
+        userInput.disabled = true;
+    });
+
+    // Lắng nghe Admin trả lời từ Telegram
+    socket.on("admin_reply", (msg) => {
+        // Phát âm thanh tin nhắn (nếu muốn)
+        // new Audio('sound.mp3').play().catch(e => {}); 
+        addMessage("**Ban Quản Trị Trả Lời:**\n\n" + msg, 'bot'); 
+    });
+
+    // ==========================================================
+    // 3. XỬ LÝ GIAO DIỆN & LOGIC GỬI TIN
+    // ==========================================================
+
+    // Fix lỗi chiều cao trên Mobile (iOS Safari)
+    const setAppHeight = () => {
+        document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+    }
+    window.addEventListener('resize', setAppHeight);
+    setAppHeight();
+
+    // Chào mừng
+    window.addEventListener('load', () => {
+        addMessage('Đệ chào Sư huynh ! Sư huynh cứ đặt câu hỏi ạ?', 'bot');
+    });
+
+    // Xử lý click link
+    chatMessages.addEventListener('click', function(event) {
+        const linkElement = event.target.closest('a');
+        if (linkElement) {
+            // Để mặc định cho link mở tab mới
+        }
+    });
+
+    // Hàm xử lý Text & Link (Giữ nguyên logic tốt của bạn)
+    function linkifyAndSanitize(text) {
+        if (typeof text !== 'string') return '';
         
-        const chatMessages = document.getElementById('chat-messages');
-        const userInput = document.getElementById('user-input');
-        const sendButton = document.getElementById('send-button');
+        const sanitizerDiv = document.createElement('div');
+        sanitizerDiv.textContent = text;
+        let sanitizedText = sanitizerDiv.innerHTML;
 
-        chatMessages.addEventListener('click', function(event) {
-            const linkElement = event.target.closest('a');
-            if (linkElement) {
-                // Chỉ chặn hành vi mặc định nếu không phải là nút "Đọc bài gốc" (để nó mở tab mới)
-                // Hoặc để mặc định mở tab mới luôn
+        // Hàn gắn link bị gãy do xuống dòng
+        sanitizedText = sanitizedText.replace(/([a-zA-Z0-9]-)[\s\n]+([a-zA-Z0-9])/g, "$1$2");
+
+        // Format in đậm, nghiêng
+        sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
+        sanitizedText = sanitizedText.replace(/(^|\s)_(.*?)_(\s|$)/g, '$1<span class="italic">$2</span>$3');
+
+        // Regex link
+        const urlRegex = /https?:\/\/[^\s<"]+/g;
+        
+        const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
+            if (fullString.indexOf(url, offset + url.length) !== -1) {
+                return ""; // Xóa link trùng
             }
+            let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
+            return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">Đọc Thêm</a>`;
         });
 
-        // 1. Khi tải trang
-        window.addEventListener('load', () => {
-            addMessage('Đệ chào Sư huynh ! Sư huynh cứ đặt câu hỏi ạ?', 'bot');
-            userInput.disabled = false;
-            userInput.placeholder = "Nhập câu hỏi của Sư huynh tại đây ạ...";
-        });
+        return linkifiedText.replace(/\n/g, '<br>');
+    }
 
-        // --- HÀM XỬ LÝ TEXT V4: GỘP LINK, TẠO NÚT & HÀN GẮN LINK BỊ GÃY ---
-        function linkifyAndSanitize(text) {
-            if (typeof text !== 'string') return '';
-            
-            // 1. Lọc mã độc (XSS)
-            const sanitizerDiv = document.createElement('div');
-            sanitizerDiv.textContent = text;
-            let sanitizedText = sanitizerDiv.innerHTML;
+    function addMessage(message, sender, type = 'normal') {
+        const messageWrapper = document.createElement('div');
+        messageWrapper.classList.add('message', 'mb-4', 'flex', 'w-full');
+        const messageBubble = document.createElement('div');
+        messageBubble.classList.add('message-bubble', 'rounded-xl', 'p-4', 'max-w-xl', 'shadow-md');
 
-            // 2. [MỚI] HÀN GẮN LINK BỊ GÃY (QUAN TRỌNG)
-            // Nguyên nhân: AI hay xuống dòng sau dấu gạch ngang (-). Ví dụ: "hien- \n nay"
-            // Giải pháp: Tìm (chữ-) + (khoảng trắng/xuống dòng) + (chữ) -> Gộp lại thành (chữ-chữ)
-            sanitizedText = sanitizedText.replace(/([a-zA-Z0-9]-)[\s\n]+([a-zA-Z0-9])/g, "$1$2");
-
-            // 3. Format in đậm (**text**)
-            sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
-            
-            // 4. Format in nghiêng (_text_)
-            // Chỉ in nghiêng nếu dấu _ có khoảng trắng phía trước, tránh ăn vào link chứa _
-            sanitizedText = sanitizedText.replace(/(^|\s)_(.*?)_(\s|$)/g, '$1<span class="italic">$2</span>$3');
-
-            // 5. XỬ LÝ LINK THÔNG MINH
-            // Regex bắt link (đã bỏ dấu ngoặc đơn để tránh lỗi)
-            const urlRegex = /https?:\/\/[^\s<"]+/g;
-            
-            const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
-                // Kiểm tra xem Link này có xuất hiện lại ở phía sau không? (Lọc trùng)
-                if (fullString.indexOf(url, offset + url.length) !== -1) {
-                    return ""; // Nếu còn lặp lại phía sau -> XÓA link này đi
-                }
-
-                // Nếu là link cuối cùng -> TẠO NÚT
-                let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
-                
-                // Trả về nút Nâu Đỏ - Chữ Vàng
-                return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">Đọc Thêm</a>`;
-            });
-
-            // 6. Xuống dòng
-            return linkifiedText.replace(/\n/g, '<br>');
-        }
-
-        function addMessage(message, sender, type = 'normal') {
-            const messageWrapper = document.createElement('div');
-            messageWrapper.classList.add('message', 'mb-4', 'flex', 'w-full');
-            const messageBubble = document.createElement('div');
-            messageBubble.classList.add('message-bubble', 'rounded-xl', 'p-4', 'max-w-xl', 'shadow-md');
-
-            if (sender === 'user') {
-                messageWrapper.classList.add('justify-end');
-                messageBubble.classList.add('bg-amber-600', 'text-white');
+        if (sender === 'user') {
+            messageWrapper.classList.add('justify-end');
+            messageBubble.classList.add('bg-amber-600', 'text-white');
+        } else {
+            messageWrapper.classList.add('justify-start');
+            if (type === 'error') {
+                messageBubble.classList.add('bg-red-800', 'text-white');
+            } else if (type === 'info') {
+                messageBubble.classList.add('bg-stone-200', 'text-stone-500', 'text-center', 'w-full', 'max-w-full', 'shadow-none');
             } else {
-                messageWrapper.classList.add('justify-start');
-                if (type === 'error') {
-                    messageBubble.classList.add('bg-red-800', 'text-white');
-                } else if (type === 'info') {
-                    messageBubble.classList.add('bg-stone-200', 'text-stone-500', 'text-center', 'w-full', 'max-w-full', 'shadow-none');
-                } else {
-                    messageBubble.classList.add('bg-red-900', 'text-amber-200');
-                }
+                messageBubble.classList.add('bg-red-900', 'text-amber-200');
             }
-
-            const contentP = document.createElement('p');
-
-            // --- ÁP DỤNG HÀM XỬ LÝ LINK CHO CẢ 2 ---
-            contentP.innerHTML = linkifyAndSanitize(message);
-            // ------------------------------------------
-
-            messageBubble.appendChild(contentP);
-            messageWrapper.appendChild(messageBubble);
-            chatMessages.appendChild(messageWrapper);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
-        // 2. Gọi API
-        async function callBackendAPI(question) {
-            const url = `${BACKEND_API_URL.replace(/\/$/, "")}/api/chat`;
+        const contentP = document.createElement('p');
+        contentP.innerHTML = linkifyAndSanitize(message);
+        messageBubble.appendChild(contentP);
+        messageWrapper.appendChild(messageBubble);
+        chatMessages.appendChild(messageWrapper);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
 
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    question: question
-                })
-            });
+    // --- HÀM GỌI API (ĐÃ SỬA: GỬI KÈM SOCKET ID) ---
+    async function callBackendAPI(question) {
+        const url = `${BACKEND_API_URL.replace(/\/$/, "")}/api/chat`;
 
-            if (!response.ok) {
-                let errorText = `Lỗi HTTP: ${response.status} ${response.statusText}`;
-                try {
-                    const errorData = await response.json();
-                    errorText = `Đệ xin lỗi: ${errorData.error || response.statusText}`;
-                } catch (e) {
-                    errorText = `Lỗi kết nối Server.`;
-                }
-                throw new Error(errorText);
-            }
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                question: question,
+                socketId: mySocketId // <--- QUAN TRỌNG: Gửi ID này để nhận tin từ Telegram
+            })
+        });
 
-            const result = await response.json();
-            return result.answer;
-        }
-
-        async function handleSendMessage() {
-            const userQuestion = userInput.value.trim();
-            if (!userQuestion) return;
-            
-            addMessage(userQuestion, 'user');
-            userInput.value = '';
-            sendButton.disabled = true;
-            sendButton.innerHTML = '<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>';
-
+        if (!response.ok) {
+            let errorText = `Lỗi HTTP: ${response.status}`;
             try {
-                const answer = await callBackendAPI(userQuestion);
-                addMessage(answer, 'bot');
-            } catch (error) {
-                console.error("Lỗi chi tiết:", error);
-                addMessage(error.message, 'bot', 'error');
-            } finally {
-                sendButton.disabled = false;
-                sendButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"></path><path d="M22 2L15 22l-4-9-9-4 22-2z"></path></svg>';
+                const errorData = await response.json();
+                errorText = `Đệ xin lỗi: ${errorData.error || response.statusText}`;
+            } catch (e) {
+                errorText = `Lỗi kết nối Server.`;
             }
+            throw new Error(errorText);
         }
 
-        sendButton.addEventListener('click', handleSendMessage);
-        userInput.addEventListener('keydown', (event) => { 
-            if (event.key === 'Enter' && !event.shiftKey) {
-                event.preventDefault();
-                handleSendMessage();
-            }
-        });
+        const result = await response.json();
+        return result.answer;
+    }
+
+    async function handleSendMessage() {
+        const userQuestion = userInput.value.trim();
+        if (!userQuestion) return;
         
-        userInput.addEventListener('input', () => { 
-            sendButton.disabled = userInput.value.trim().length === 0; 
-        });
+        addMessage(userQuestion, 'user');
+        userInput.value = '';
+        sendButton.disabled = true;
+        // Hiệu ứng xoay xoay
+        sendButton.innerHTML = '<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>';
+
+        try {
+            const answer = await callBackendAPI(userQuestion);
+            addMessage(answer, 'bot');
+        } catch (error) {
+            console.error("Lỗi chi tiết:", error);
+            addMessage(error.message, 'bot', 'error');
+        } finally {
+            sendButton.disabled = false;
+            sendButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"></path><path d="M22 2L15 22l-4-9-9-4 22-2z"></path></svg>';
+            userInput.focus();
+        }
+    }
+
+    sendButton.addEventListener('click', handleSendMessage);
+    userInput.addEventListener('keydown', (event) => { 
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            handleSendMessage();
+        }
+    });
+    
+    userInput.addEventListener('input', () => { 
+        sendButton.disabled = userInput.value.trim().length === 0; 
+    });
     </script>
 </body>
 </html>
