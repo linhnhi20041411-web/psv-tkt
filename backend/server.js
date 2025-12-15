@@ -486,7 +486,7 @@ app.post('/api/admin/sync-blogger', async (req, res) => {
         res.write(`\n🎉 HOÀN TẤT!\n`); res.end();
     } catch (e) { 
         res.write(`❌ Lỗi: ${e.message}\n`); 
-        await sendTelegramAlert(`❌ LỖI SYNC BLOGGER:\n${e.message}`);
+        //await sendTelegramAlert(`❌ LỖI SYNC BLOGGER:\n${e.message}`);
         res.end(); 
     }
 });
@@ -507,7 +507,7 @@ app.post('/api/admin/manual-add', async (req, res) => {
         }
         res.json({ message: "Thành công!", logs: ["Đã lưu xong."] });
     } catch (e) { 
-        await sendTelegramAlert(`❌ Lỗi Manual Add (${title}):\n${e.message}`);
+        //await sendTelegramAlert(`❌ Lỗi Manual Add (${title}):\n${e.message}`);
         res.status(500).json({ error: e.message }); 
     }
 });
@@ -536,7 +536,7 @@ app.post('/api/admin/check-batch', async (req, res) => {
         }
         res.json(results);
     } catch (e) { 
-        await sendTelegramAlert(`❌ Lỗi Check Batch:\n${e.message}`);
+        //await sendTelegramAlert(`❌ Lỗi Check Batch:\n${e.message}`);
         res.status(500).json({ error: e.message }); 
     }
 });
@@ -649,7 +649,7 @@ app.post('/api/admin/delete-post', async (req, res) => {
 
         if (error) throw error;
 
-        await sendTelegramAlert(`🗑️ <b>ADMIN ĐÃ XÓA BÀI VIẾT</b>\n\n🆔 ID: ${id}\n📝 Tiêu đề: ${title || "Không rõ"}`);
+        //await sendTelegramAlert(`🗑️ <b>ADMIN ĐÃ XÓA BÀI VIẾT</b>\n\n🆔 ID: ${id}\n📝 Tiêu đề: ${title || "Không rõ"}`);
 
         res.json({ success: true, message: "Đã xóa bài viết thành công!" });
 
