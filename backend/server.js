@@ -667,74 +667,75 @@ app.post('/api/admin/delete-post', async (req, res) => {
     }
 });
 
-// --- API XÓA BÀI TRÙNG LẶP (DEDUPLICATE - PHIÊN BẢN QUÉT FULL DATA) ---
+// --- API XÓA BÀI TRÙNG LẶP (PHIÊN BẢN TỐI ƯU: BỎ QUA KHOẢNG TRẮNG) ---
 app.post('/api/admin/remove-duplicates', async (req, res) => {
     const { password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
 
-    // Stream log về client
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Transfer-Encoding', 'chunked');
 
     try {
-        res.write("🔍 Đang tải toàn bộ dữ liệu (Chế độ Phân trang)...\n");
+        res.write("🔍 Đang tải toàn bộ dữ liệu...\n");
 
         let allData = [];
         let from = 0;
-        const pageSize = 1000; // Mỗi lần tải 1000 bài
+        const pageSize = 1000;
         let keepFetching = true;
 
-        // --- VÒNG LẶP TẢI DỮ LIỆU ---
+        // 1. Tải dữ liệu
         while (keepFetching) {
             const { data, error } = await supabase
                 .from('vn_buddhism_content')
-                .select('id, url, content')
-                .range(from, from + pageSize - 1); // Lấy từ dòng 'from' đến 'to'
+                .select('id, url, content') // Lấy ID, URL và Content
+                .range(from, from + pageSize - 1);
 
             if (error) throw error;
 
             if (data.length === 0) {
-                keepFetching = false; // Hết dữ liệu thì dừng
+                keepFetching = false;
             } else {
-                allData = allData.concat(data); // Gộp dữ liệu mới vào mảng tổng
-                from += pageSize; // Tăng vị trí bắt đầu cho lần sau
-                res.write(`... Đã tải được: ${allData.length} bản ghi\n`);
-                
-                // Nếu số lượng tải về ít hơn pageSize nghĩa là đã đến trang cuối
+                allData = allData.concat(data);
+                from += pageSize;
+                res.write(`... Đã tải: ${allData.length} dòng\n`);
                 if (data.length < pageSize) keepFetching = false;
             }
         }
 
-        res.write(`📂 TỔNG CỘNG: ${allData.length} bản ghi trong Database.\n`);
-        res.write("⚙️ Đang phân tích tìm bài trùng...\n");
+        res.write(`📂 Tổng: ${allData.length} bản ghi. Đang phân tích...\n`);
 
         const seen = new Set();
         const duplicateIds = [];
 
-        // Duyệt qua từng dòng trong dữ liệu tổng
+        // 2. Phân tích tìm trùng lặp (Logic mới)
         for (const item of allData) {
-            // Tạo "chữ ký" duy nhất: URL + 100 ký tự đầu của Content
-            // Cắt content ngắn gọn để đỡ tốn bộ nhớ
-            const contentSig = item.content ? item.content.substring(0, 100) : "empty";
-            const signature = `${item.url}|||${contentSig}`;
+            // Chuẩn hóa Content: Xóa hết dấu cách, xuống dòng, chỉ giữ lại chữ cái
+            // Mục đích: Để "Tiêu đề: A" và "Tiêu đề:A" được coi là giống nhau
+            const cleanContent = item.content 
+                ? item.content.substring(0, 150).replace(/\s+/g, '').toLowerCase() 
+                : "empty";
+            
+            // Chữ ký = URL + Nội dung đã chuẩn hóa
+            const signature = `${item.url}|||${cleanContent}`;
 
             if (seen.has(signature)) {
-                // Nếu đã thấy chữ ký này rồi -> Đây là bản sao -> Xóa
+                // Nếu đã thấy chữ ký này rồi -> Đây là bản sao -> Đánh dấu xóa
                 duplicateIds.push(item.id);
             } else {
+                // Nếu chưa thấy -> Đây là bản gốc -> Giữ lại
                 seen.add(signature);
             }
         }
 
         if (duplicateIds.length === 0) {
-            res.write("✅ Tuyệt vời! Không phát hiện dữ liệu trùng lặp.\n");
+            res.write("✅ Database sạch sẽ! Không có bài trùng.\n");
             return res.end();
         }
 
-        res.write(`⚠️ Phát hiện ${duplicateIds.length} bản ghi trùng lặp.\n`);
-        res.write("🗑️ Đang tiến hành xóa...\n");
+        res.write(`⚠️ Phát hiện ${duplicateIds.length} rác trùng lặp.\n`);
+        res.write("🗑️ Đang xóa...\n");
 
-        // Chia nhỏ mảng ID để xóa (Supabase giới hạn số lượng trong 1 lệnh xóa)
+        // 3. Xóa theo lô (Batch Delete)
         const batchSize = 100;
         for (let i = 0; i < duplicateIds.length; i += batchSize) {
             const batch = duplicateIds.slice(i, i + batchSize);
@@ -744,13 +745,13 @@ app.post('/api/admin/remove-duplicates', async (req, res) => {
                 .in('id', batch);
             
             if (delError) {
-                res.write(`❌ Lỗi xóa batch ${i}: ${delError.message}\n`);
+                res.write(`❌ Lỗi xóa lô ${i}: ${delError.message}\n`);
             } else {
-                res.write(`✅ Đã xóa lô ${i + 1} - ${Math.min(i + batchSize, duplicateIds.length)}\n`);
+                res.write(`✅ Đã dọn dẹp lô ${i + 1} - ${Math.min(i + batchSize, duplicateIds.length)}\n`);
             }
         }
 
-        res.write(`🎉 HOÀN TẤT! Đã dọn dẹp sạch sẽ Database.\n`);
+        res.write(`🎉 HOÀN TẤT! Đã giải phóng bộ nhớ Database.\n`);
         res.end();
 
     } catch (e) {
