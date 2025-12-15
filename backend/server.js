@@ -295,45 +295,45 @@ app.post('/api/chat', async (req, res) => {
         // Bước 2: Tìm kiếm dữ liệu
         const documents = await searchSupabaseContext(searchKeywords);
 
-        // Biến cờ: Xác định xem có cần người hỗ trợ không
         let needHumanSupport = false;
         let aiResponse = "";
 
-        // TRƯỜNG HỢP 1: Không tìm thấy bài nào trong Database
         if (!documents || documents.length === 0) {
             needHumanSupport = true;
         } else {
-            // TRƯỜNG HỢP 2: Có bài viết, NHƯNG phải kiểm tra xem nội dung có liên quan không
             let contextString = "";
             documents.forEach((doc, index) => {
                 contextString += `--- Nguồn #${index + 1} ---\nLink: ${doc.url}\nTiêu đề: ${doc.metadata?.title || 'No Title'}\nNội dung: ${doc.content.substring(0, 800)}...\n`;
             });
 
-            // --- PROMPT "SIẾT CHẶT" ---
+            // PROMPT CẬP NHẬT: Trả về "NO_INFO" để kích hoạt Telegram
             const systemPrompt = `
-            Bạn là Máy Tra Cứu Thông Tin (Pháp Môn Tâm Linh).
+            Bạn là một công cụ trích xuất thông tin chính xác tuyệt đối từ cơ sở dữ liệu Supabase.
+            Nhiệm vụ: Trả lời câu hỏi dựa trên "VĂN BẢN NGUỒN".
+
+            **QUY TẮC BẮT BUỘC:**
+            1.  **NGUỒN DỮ LIỆU DUY NHẤT:** Chỉ được phép sử dụng thông tin có trong phần "VĂN BẢN NGUỒN". TUYỆT ĐỐI KHÔNG sử dụng kiến thức bên ngoài.
+            2.  **CHIA NHỎ:** Tách từng ý quan trọng thành các gạch đầu dòng.
+            3.  **XỬ LÝ KHI KHÔNG TÌM THẤY (QUAN TRỌNG):**
+                - Nếu thông tin không có trong văn bản nguồn, hoặc độ liên quan quá thấp.
+                - BẮT BUỘC trả lời chính xác cụm từ duy nhất: "NO_INFO" (Không thêm bớt gì khác).
+            4.  **XƯNG HÔ:** Bạn tự xưng là "đệ" và gọi người hỏi là "Sư huynh".
+            5.  **XỬ LÝ LINK:** Giữ nguyên URL, KHÔNG dùng Markdown link.
+            6.  **PHONG CÁCH:** Trả lời NGẮN GỌN, SÚC TÍCH.
             
-            DỮ LIỆU THAM KHẢO:
+            --- VĂN BẢN NGUỒN ---
             ${contextString}
+            --- HẾT VĂN BẢN NGUỒN ---
             
-            CÂU HỎI: "${fullQuestion}"
-            
-            QUY TẮC BẮT BUỘC (TUÂN THỦ 100%):
-            1. Đọc kỹ "DỮ LIỆU THAM KHẢO".
-            2. Nếu dữ liệu KHÔNG chứa câu trả lời cho câu hỏi (hoặc câu hỏi không liên quan đến Phật pháp/Tâm linh như hỏi thời tiết, giá vàng, xổ số...):
-               -> Chỉ trả về đúng duy nhất cụm từ: "NO_INFO"
-            3. Nếu dữ liệu CÓ chứa câu trả lời:
-               -> Trả lời ngắn gọn dựa trên dữ liệu.
-               -> Cuối câu dán Link gốc.
-               -> Không chào hỏi, không thêm lời dẫn thừa.
-            `;
+            Câu hỏi: ${fullQuestion}
+            Câu trả lời:`;
 
             const startIndex = getRandomStartIndex();
             const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
 
             aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_INFO";
             
-            // Nếu AI trả về "NO_INFO", nghĩa là nó thấy bài viết không liên quan
+            // Nếu AI trả về "NO_INFO" -> Bật chế độ chuyển Telegram
             if (aiResponse.includes("NO_INFO")) {
                 needHumanSupport = true;
             }
