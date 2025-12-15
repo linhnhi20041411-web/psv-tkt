@@ -267,8 +267,7 @@ app.post('/api/chat', async (req, res) => {
         1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN".
         2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-).
         3. CẤM TUYỆT ĐỐI: Không được sử dụng dấu ngoặc vuông [ hoặc ] trong câu trả lời.
-        4. TRÍCH DẪN LINK: Cuối mỗi ý, xuống dòng và ghi link trần theo mẫu:
-           👉 Bài gốc: https://...
+        4. TRÍCH DẪN LINK: Cuối mỗi ý, xuống dòng và ghi link trần theo mẫu.
         5. XƯNG HÔ: Tự xưng "đệ", gọi người hỏi "Sư huynh".
 
         --- VĂN BẢN NGUỒN ---
@@ -538,7 +537,7 @@ app.post('/api/admin/update-post', async (req, res) => {
     }
 });
 
-// --- API XÓA BÀI TRÙNG LẶP (DEDUPLICATE) ---
+// --- API XÓA BÀI TRÙNG LẶP (DEDUPLICATE - PHIÊN BẢN QUÉT FULL DATA) ---
 app.post('/api/admin/remove-duplicates', async (req, res) => {
     const { password } = req.body;
     if (password !== ADMIN_PASSWORD) return res.status(403).json({ error: "Sai mật khẩu!" });
@@ -548,26 +547,46 @@ app.post('/api/admin/remove-duplicates', async (req, res) => {
     res.setHeader('Transfer-Encoding', 'chunked');
 
     try {
-        res.write("🔍 Đang tải toàn bộ dữ liệu để đối chiếu (có thể mất vài giây)...\n");
-        
-        // Lấy toàn bộ ID, URL và Content (Băm nhỏ để so sánh)
-        // Lưu ý: Nếu dữ liệu quá lớn (>10.000 dòng), cần pagination. Ở đây giả sử <10.000
-        const { data, error } = await supabase
-            .from('vn_buddhism_content')
-            .select('id, url, content');
+        res.write("🔍 Đang tải toàn bộ dữ liệu (Chế độ Phân trang)...\n");
 
-        if (error) throw error;
+        let allData = [];
+        let from = 0;
+        const pageSize = 1000; // Mỗi lần tải 1000 bài
+        let keepFetching = true;
 
-        res.write(`📂 Tổng số bản ghi: ${data.length}\n`);
-        
+        // --- VÒNG LẶP TẢI DỮ LIỆU ---
+        while (keepFetching) {
+            const { data, error } = await supabase
+                .from('vn_buddhism_content')
+                .select('id, url, content')
+                .range(from, from + pageSize - 1); // Lấy từ dòng 'from' đến 'to'
+
+            if (error) throw error;
+
+            if (data.length === 0) {
+                keepFetching = false; // Hết dữ liệu thì dừng
+            } else {
+                allData = allData.concat(data); // Gộp dữ liệu mới vào mảng tổng
+                from += pageSize; // Tăng vị trí bắt đầu cho lần sau
+                res.write(`... Đã tải được: ${allData.length} bản ghi\n`);
+                
+                // Nếu số lượng tải về ít hơn pageSize nghĩa là đã đến trang cuối
+                if (data.length < pageSize) keepFetching = false;
+            }
+        }
+
+        res.write(`📂 TỔNG CỘNG: ${allData.length} bản ghi trong Database.\n`);
+        res.write("⚙️ Đang phân tích tìm bài trùng...\n");
+
         const seen = new Set();
         const duplicateIds = [];
 
-        // Duyệt qua từng dòng
-        for (const item of data) {
+        // Duyệt qua từng dòng trong dữ liệu tổng
+        for (const item of allData) {
             // Tạo "chữ ký" duy nhất: URL + 100 ký tự đầu của Content
-            // (Lý do: Một bài viết dài có nhiều chunks cùng URL, nên phải so cả Content)
-            const signature = `${item.url}|||${item.content.substring(0, 100)}`;
+            // Cắt content ngắn gọn để đỡ tốn bộ nhớ
+            const contentSig = item.content ? item.content.substring(0, 100) : "empty";
+            const signature = `${item.url}|||${contentSig}`;
 
             if (seen.has(signature)) {
                 // Nếu đã thấy chữ ký này rồi -> Đây là bản sao -> Xóa
@@ -585,7 +604,7 @@ app.post('/api/admin/remove-duplicates', async (req, res) => {
         res.write(`⚠️ Phát hiện ${duplicateIds.length} bản ghi trùng lặp.\n`);
         res.write("🗑️ Đang tiến hành xóa...\n");
 
-        // Chia nhỏ mảng ID để xóa (Supabase giới hạn số lượng trong 1 lệnh)
+        // Chia nhỏ mảng ID để xóa (Supabase giới hạn số lượng trong 1 lệnh xóa)
         const batchSize = 100;
         for (let i = 0; i < duplicateIds.length; i += batchSize) {
             const batch = duplicateIds.slice(i, i + batchSize);
@@ -605,6 +624,7 @@ app.post('/api/admin/remove-duplicates', async (req, res) => {
         res.end();
 
     } catch (e) {
+        console.error("Lỗi:", e);
         res.write(`❌ Lỗi hệ thống: ${e.message}\n`);
         res.end();
     }
