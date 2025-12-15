@@ -341,7 +341,7 @@ app.post('/api/chat', async (req, res) => {
              finalAnswer = "Mời Sư huynh tra cứu thêm tại mục lục tổng quan : https://mucluc.pmtl.site .";
         } else {
             aiResponse = aiResponse.replace(/\*\*Phụng Sự Viên Ảo Trả Lời :\*\*/g, "").trim();
-            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse + "\n\n_Nhắc nhở: Sư huynh kiểm tra thêm tại: https://timkhaithi.pmtl.site nhé 🙏_";
+            finalAnswer = "**Phụng Sự Viên Ảo Trả Lời:**\n\n" + aiResponse + "\n\n**Nhắc nhở: Sư huynh kiểm tra thêm tại: https://timkhaithi.pmtl.site **";
         }
 
         res.json({ answer: finalAnswer });
