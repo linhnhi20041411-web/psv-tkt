@@ -305,18 +305,43 @@
             });
         }
         
-        // Hàm xóa và quét link chết (Dùng lại logic cũ nhưng lấy pass từ Session)
+        // Hàm xóa bài viết theo URL (Dùng để dọn dẹp bài lỗi/trùng link)
         async function deleteSinglePost(urlIn = null) {
-            const url = urlIn || document.getElementById('deleteUrl').value;
-            if(!url) return alert("Thiếu URL");
-            if(!confirm("Xóa vĩnh viễn bài này?")) return;
+            const url = urlIn || document.getElementById('deleteUrl').value.trim();
+            
+            if(!url) return alert("Vui lòng nhập URL cần xóa!");
+            
+            if(!confirm(`⚠️ CẢNH BÁO QUAN TRỌNG:\n\nHành động này sẽ xóa TẤT CẢ các dòng dữ liệu (bao gồm các đoạn cắt nhỏ) thuộc về URL:\n\n${url}\n\nBạn có chắc chắn muốn xóa sạch không?`)) {
+                return;
+            }
+
+            const password = window.adminPassword || sessionStorage.getItem('adminPass') || prompt("Nhập mật khẩu Admin:");
+            if (!password) return;
+
             try {
-                // Lưu ý: Đây là API xóa theo URL (delete-post trong server của bạn có hỗ trợ cả URL và ID tùy logic)
-                // Nhưng trong server.js hiện tại, /api/admin/delete-post dùng ID. 
-                // Nếu bạn muốn dùng hàm này cho ô nhập URL, bạn cần sửa server để hỗ trợ xóa theo URL.
-                // Tạm thời, hàm này chỉ dùng cho ô nhập URL ở tab Bảo trì.
-                alert("Chức năng xóa theo URL đang bảo trì. Vui lòng dùng chức năng Xóa trong tab Quản Lý.");
-            } catch(e) { alert(e.message); }
+                // Gọi API
+                const res = await fetch(`${API_URL}/api/admin/delete-post`, {
+                    method: 'POST', 
+                    headers: {'Content-Type':'application/json'},
+                    body: JSON.stringify({
+                        password: password, 
+                        url: url, // Chỉ gửi URL
+                        title: "Dọn dẹp bài trùng theo Link"
+                    })
+                });
+
+                const d = await res.json();
+                
+                if(d.success) {
+                    alert("✅ Đã dọn dẹp sạch sẽ URL này!");
+                    document.getElementById('deleteUrl').value = ""; // Xóa ô nhập
+                    searchPosts(); // Làm mới danh sách nếu đang xem
+                } else {
+                    alert("❌ Lỗi: " + d.error);
+                }
+            } catch(e) { 
+                alert("Lỗi kết nối: " + e.message); 
+            }
         }
 
         async function scanDeadLinks() {
