@@ -130,25 +130,25 @@ async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
 
 // --- 5. AI EXTRACT & EMBEDDING ---
 async function aiExtractKeywords(userQuestion) {
+    // Prompt này yêu cầu AI đoán các từ khóa liên quan về mặt ý nghĩa (Semantic Keywords)
     const prompt = `
-    Nhiệm vụ: Trích xuất CỤM TỪ KHÓA CHÍNH trong câu hỏi để tìm kiếm trong Tiêu đề bài viết.
+    Nhiệm vụ: Phân tích câu hỏi người dùng và đưa ra 3-5 cụm từ khóa tìm kiếm liên quan nhất đến giáo lý/tâm linh.
+    
     Quy tắc:
-    1. Bỏ từ giao tiếp (đệ, muốn, sư phụ, khai thị, có không...).
-    2. Giữ lại cụm danh từ/động từ đặc thù nhất.
-    3. KHÔNG thêm từ mới, chỉ cắt bớt từ câu gốc.
+    1. Giữ lại từ khóa gốc.
+    2. Thêm các từ đồng nghĩa hoặc khái niệm Phật pháp liên quan (Ví dụ: "bệnh ung thư" -> thêm "nghiệp sát sinh", "nghiệp nặng").
+    3. Trả về kết quả ngăn cách bởi dấu phẩy.
     
-    Ví dụ: 
-    - "đệ muốn mở nhà hàng chay" -> mở nhà hàng chay
-    - "làm sao để phóng sinh đúng pháp" -> phóng sinh đúng pháp
-    
-    Input: "${userQuestion}"
-    Output:`;
+    Câu hỏi: "${userQuestion}"
+    Output (Chỉ các từ khóa):`;
     
     try {
         const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: prompt }] }] }, getRandomStartIndex());
         let keywords = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || userQuestion;
-        // Xóa dấu ngoặc kép nếu AI lỡ thêm vào
-        return keywords.replace(/["']/g, "");
+        
+        // Làm sạch và trả về
+        console.log(`🧠 AI suy luận từ khóa: "${keywords}"`);
+        return keywords.replace(/\n/g, " ").replace(/["']/g, "");
     } catch (e) { return userQuestion; }
 }
 
@@ -260,15 +260,25 @@ app.post('/api/chat', async (req, res) => {
         ];
 
         // --- BƯỚC 1: PROMPT GỐC (Đã thêm lệnh CẤM dấu ngoặc) ---
-        const promptGoc = `Bạn là một công cụ trích xuất thông tin chính xác.
-        Nhiệm vụ: Trả lời câu hỏi dựa trên "VĂN BẢN NGUỒN" bên dưới.
-
+        const promptGoc = `Bạn là một chuyên gia tra cứu Phật Pháp.
+        
+        NHIỆM VỤ CỦA BẠN:
+        1. PHÂN TÍCH Ý ĐỊNH: Đọc câu hỏi của Sư huynh, xác định "Nỗi lo" hoặc "Vấn đề tâm linh" cốt lõi là gì (Ví dụ: Hỏi về "mở quán ăn" -> Ý định là lo về "nghiệp sát sinh").
+        2. QUÉT DỮ LIỆU: Đọc "VĂN BẢN NGUỒN", tìm đoạn văn nào giải quyết đúng cái "Vấn đề tâm linh" đó.
+        3. TRÍCH XUẤT: Copy nguyên văn đoạn đó ra.
+        
         QUY TẮC BẮT BUỘC (TUÂN THỦ 100%):
         1. NGUỒN DỮ LIỆU: Chỉ sử dụng thông tin trong "VĂN BẢN NGUỒN".
         2. ĐỊNH DẠNG: Trả lời dạng gạch đầu dòng (-),KHÔNG chào hỏi, KHÔNG mở bài, KHÔNG kết luận. (Chỉ liệt kê nội dung).
         3. CẤM TUYỆT ĐỐI: Không được sử dụng dấu ngoặc vuông [ hoặc ] trong câu trả lời.
         4. TRÍCH DẪN LINK: Cuối mỗi ý quan trọng, xuống dòng và ghi: https://...
-           
+
+        VÍ DỤ TƯ DUY (MẪU):
+        - Câu hỏi: "quên chấm nnn sau đó lỡ đốt rồi có dùng được không?"
+        - Phân tích: Người hỏi muốn hỏi ngôi nhà nhỏ quên chưa chấm đủ số chấm đỏ, sau đó lại đốt đi rồi, muốn hỏi ngôi nhà nhỏ đó có tác dụng không.
+        - Tìm trong văn bản: Thấy đoạn nói về "quên chấm đủ số biến kinh đã niệm trên ngôi nhà nhỏ...".
+        - Kết quả: Trích dẫn đoạn "Đã đốt xong kinh văn của Ngôi Nhà Nhỏ nhưng bị thiếu dấu chấm...".
+        
         --- VĂN BẢN NGUỒN ---
         ${contextString}
         --- HẾT VĂN BẢN NGUỒN ---
