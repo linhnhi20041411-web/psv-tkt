@@ -82,7 +82,7 @@ async function sendTelegramAlert(message) {
     if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) return;
     try {
         const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
-        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>PSV ẢO</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
+        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: `🤖 <b>PSV ẢO "Văn Tư Tu"</b> 🚨\n\n${message}`, parse_mode: 'HTML' });
     } catch (error) { console.error("Telegram Error:", error.message); }
 }
 
