@@ -1,5 +1,6 @@
 const express = require('express');
 const axios = require('axios');
+const cron = require('node-cron');
 const cors = require('cors');
 const http = require('http'); 
 const { Server } = require("socket.io");
@@ -417,33 +418,92 @@ app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res)
     } catch (e) { console.error(e); res.sendStatus(500); }
 });
 
-// --- CÁC API ADMIN (GIỮ NGUYÊN) ---
-app.post('/api/admin/sync-blogger', async (req, res) => {
-    const { password, blogUrl } = req.body;
-    res.setHeader('Content-Type', 'text/plain; charset=utf-8'); res.setHeader('Transfer-Encoding', 'chunked');
-    if (password !== ADMIN_PASSWORD) { res.write("❌ Sai mật khẩu!\n"); return res.end(); }
+// ============================================================
+// KHU VỰC TỰ ĐỘNG HÓA (AUTO BOT) & ĐỒNG BỘ BLOGGER
+// ============================================================
+
+// 1. Hàm Core: Xử lý logic quét bài (Dùng chung cho cả Auto và Thủ công)
+async function coreSyncBlogger(logCallback, blogUrl = "https://timkhaithi.pmtl.site") {
     try {
         const cleanBlogUrl = blogUrl.replace(/\/$/, "");
-        const feed = await parser.parseURL(`${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=100`);
-        res.write(`✅ Tìm thấy ${feed.items.length} bài.\n`);
+        if (logCallback) logCallback(`⏳ [${new Date().toLocaleTimeString()}] Đang đọc RSS từ: ${cleanBlogUrl}...`);
+        
+        const feed = await parser.parseURL(`${cleanBlogUrl}/feeds/posts/default?alt=rss&max-results=50`); 
+        if (logCallback) logCallback(`✅ Tìm thấy ${feed.items.length} bài viết.`);
+        
+        let countNew = 0;
         for (const post of feed.items) {
+            // Kiểm tra trùng lặp
             const { count } = await supabase.from('vn_buddhism_content').select('*', { count: 'exact', head: true }).eq('url', post.link);
-            if (count > 0) continue;
+            if (count > 0) continue; 
+
+            // Thêm mới
+            countNew++;
+            if (logCallback) logCallback(`⚙️ New Post: ${post.title}`);
             const chunks = chunkText(cleanText(post.content || post['content:encoded'] || ""));
-            res.write(`⚙️ Nạp: ${post.title.substring(0,30)}...\n`);
+            
             for (const chunk of chunks) {
                 try {
                     const embedding = await callEmbeddingWithRetry(`Tiêu đề: ${post.title}\nNội dung: ${chunk}`, getRandomStartIndex());
                     await supabase.from('vn_buddhism_content').insert({
-                        content: `Tiêu đề: ${post.title}\nNội dung: ${chunk}`, embedding, url: post.link, original_id: 0, metadata: { title: post.title, type: 'rss_auto' }
+                        content: `Tiêu đề: ${post.title}\nNội dung: ${chunk}`,
+                        embedding,
+                        url: post.link,
+                        original_id: 0,
+                        metadata: { title: post.title, type: 'rss_auto' }
                     });
-                } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); }
+                } catch (e) { console.error(e); }
             }
-            await sleep(300);
+            await sleep(300); 
         }
-        res.write(`\n🎉 HOÀN TẤT!\n`); res.end();
-    } catch (e) { res.write(`❌ Lỗi: ${e.message}\n`); res.end(); }
+        
+        if (logCallback) logCallback(`🎉 HOÀN TẤT! Đã thêm: ${countNew} bài.`);
+        return countNew;
+    } catch (e) {
+        if (logCallback) logCallback(`❌ Lỗi Core: ${e.message}`);
+        throw e;
+    }
+}
+
+// 2. API Thủ công (Sư huynh bấm nút trên web)
+app.post('/api/admin/sync-blogger', async (req, res) => {
+    const { password, blogUrl } = req.body;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8'); res.setHeader('Transfer-Encoding', 'chunked');
+    if (password !== ADMIN_PASSWORD) { res.write("❌ Sai mật khẩu!\n"); return res.end(); }
+
+    await coreSyncBlogger((msg) => res.write(msg + "\n"), blogUrl);
+    res.end();
 });
+
+// 3. Bot Tự động (Chạy ngầm 6 tiếng/lần)
+// '0 */6 * * *' = Phút thứ 0 của mỗi 6h (0h, 6h, 12h, 18h)
+cron.schedule('0 */6 * * *', async () => {
+    console.log('🤖 [AUTO] Running 6h Sync...');
+    try {
+        await sendTelegramAlert("🤖 <b>AUTO-BOT:</b> Bắt đầu phiên quét bài mới...");
+        let logBuffer = "";
+        
+        const count = await coreSyncBlogger((msg) => {
+            console.log(msg); // Log ra server render
+            if(msg.includes("New Post") || msg.includes("Lỗi")) logBuffer += msg + "\n";
+        });
+
+        if (count > 0) {
+            await sendTelegramAlert(`✅ <b>AUTO-BOT XONG!</b>\nĐã thêm ${count} bài.\n\n${logBuffer}`);
+        } else {
+            console.log("[AUTO] Không có bài mới.");
+        }
+    } catch (e) {
+        await sendTelegramAlert(`❌ <b>AUTO-BOT LỖI:</b> ${e.message}`);
+    }
+});
+
+// 4. API Wake-up (Để giữ server không ngủ)
+app.get('/api/health', (req, res) => {
+    res.send("Server đang thức! Sẵn sàng phục vụ.");
+});
+
+// ============================================================
 
 app.post('/api/admin/manual-add', async (req, res) => {
     const { password, url, title, content } = req.body;
