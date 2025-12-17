@@ -112,25 +112,32 @@ function chunkText(text, maxChunkSize = 2000) {
 }
 
 // --- GỌI GEMINI ---
-async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0) {
+async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0, modelName = "gemini-2.5-flash-lite") {
     if (keyIndex >= apiKeys.length) {
-        if (retryCount < 1) {
+        if (retryCount < 1) { // Thử lại 1 vòng nữa nếu hết key
             await sleep(2000);
-            return callGeminiWithRetry(payload, 0, retryCount + 1);
+            return callGeminiWithRetry(payload, 0, retryCount + 1, modelName);
         }
         await sendTelegramAlert("🆘 HẾT SẠCH API KEY!");
         throw new Error("ALL_KEYS_EXHAUSTED");
     }
+
     const currentKey = apiKeys[keyIndex];
-    const model = "gemini-2.5-flash"; 
-    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${currentKey}`;
+    // Sửa chỗ này để dùng modelName truyền vào
+    const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${currentKey}`;
+    
     try {
         return await axios.post(apiUrl, payload, { headers: { 'Content-Type': 'application/json' }, timeout: 60000 });
     } catch (error) {
         if (error.response && [429, 400, 403, 500, 503].includes(error.response.status)) {
-            console.warn(`⚠️ Key ${keyIndex} lỗi. Đổi Key...`);
-            if (error.response.status === 429) await sleep(1000); 
-            return callGeminiWithRetry(payload, keyIndex + 1, retryCount);
+            console.warn(`⚠️ Key ${keyIndex} lỗi (${error.response.status}). Đổi Key...`);
+            if (error.response.status === 429) {
+                // Ngủ ngẫu nhiên từ 1s đến 3s để tránh các request bị kẹt cùng lúc (Thundering Herd Problem)
+                const delay = Math.floor(Math.random() * 2000) + 1000;
+                await sleep(delay); 
+            }
+            // Truyền tiếp modelName vào đệ quy
+            return callGeminiWithRetry(payload, keyIndex + 1, retryCount, modelName);
         }
         throw error;
     }
@@ -165,10 +172,12 @@ async function aiExtractKeywords(userQuestion) {
 
     try {
         const startIndex = getRandomStartIndex();
+        const modelForTool = "gemini-2.5-flash-lite"; 
+
         const response = await callGeminiWithRetry({ 
             contents: [{ parts: [{ text: prompt }] }],
             generationConfig: { responseMimeType: "application/json" } 
-        }, startIndex);
+        }, startIndex, 0, modelForTool); // Truyền model name vào
         
         const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         return JSON.parse(text); 
@@ -346,7 +355,14 @@ app.post('/api/chat', async (req, res) => {
             `;
 
             const startIndex = getRandomStartIndex();
-            const response = await callGeminiWithRetry({ contents: [{ parts: [{ text: systemPrompt }] }] }, startIndex);
+            const modelForAnswer = "gemini-2.5-flash-lite"; 
+            
+            const response = await callGeminiWithRetry(
+                { contents: [{ parts: [{ text: systemPrompt }] }] }, 
+                startIndex, 
+                0, 
+                modelForAnswer // <--- Truyền rõ vào đây
+            );
             aiResponse = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_INFO";
             
             if (aiResponse.includes("NO_INFO")) needHumanSupport = true;
