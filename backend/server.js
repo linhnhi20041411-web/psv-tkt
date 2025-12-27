@@ -188,13 +188,20 @@ app.post('/api/chat', async (req, res) => {
                 text: `📨 <b>TIN NHẮN TRỰC TIẾP</b>\n\n"${safeMsg}"\n\n👉 <i>Admin hãy Reply để trả lời.</i>`,
                 parse_mode: 'HTML'
             });
-
-            if (teleRes.data && socketId) {
-                const msgId = teleRes.data.result.message_id;
-                pendingRequests.set(msgId, socketId);
-            }
-            return res.json({ answer: "✅ Đệ đã chuyển tin nhắn riêng tới Ban quản trị ạ! 🙏" });
-        }
+ 
+        // A. Gửi Telegram khi dùng lệnh @psv
+        const teleRes = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            chat_id: TELEGRAM_CHAT_ID,
+            text: `📨 <b>TIN NHẮN TRỰC TIẾP</b>\n\n"${safeMsg}"\n\n<code>#id_${socketId}</code>`, // Giấu ID ở đây
+            parse_mode: 'HTML'
+        });
+        
+        // B. Gửi Telegram khi không tìm thấy dữ liệu
+        const teleResNoData = await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            chat_id: TELEGRAM_CHAT_ID,
+            text: `❓ <b>KHÔNG TÌM THẤY DỮ LIỆU</b>\nUser: "${escapeHtml(question)}"\n\n<code>#id_${socketId}</code>`, // Giấu ID ở đây
+            parse_mode: 'HTML'
+        });
 
         // 2. TÌM KIẾM DỮ LIỆU TRÊN HASHNODE
         const fullQuestion = dichVietTat(question);
@@ -269,19 +276,19 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// --- API WEBHOOK: ADMIN REPLY TỪ TELEGRAM ---
+// --- API WEBHOOK: ADMIN REPLY TỪ TELEGRAM (KHÔNG CẦN DATABASE) ---
 app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
     try {
         const { message } = req.body;
-        console.log("📩 Webhook nhận dữ liệu!");
-
         if (message && message.reply_to_message) {
-            const originalMsgId = message.reply_to_message.message_id;
-            console.log("🔍 Tìm Socket cho MsgID:", originalMsgId);
-
-            if (pendingRequests.has(originalMsgId)) {
-                const userSocketId = pendingRequests.get(originalMsgId);
-                console.log("✅ Khớp SocketID:", userSocketId);
+            const originalText = message.reply_to_message.text || message.reply_to_message.caption || "";
+            
+            // Dùng Regex để tìm lại SocketID đã giấu trong tin nhắn cũ
+            const match = originalText.match(/#id_([a-zA-Z0-9_-]+)/);
+            
+            if (match && match[1]) {
+                const userSocketId = match[1];
+                console.log("✅ Tìm lại được SocketID từ nội dung tin nhắn:", userSocketId);
 
                 if (message.photo) {
                     const fileId = message.photo[message.photo.length - 1].file_id;
@@ -292,20 +299,16 @@ app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res)
                     
                     io.to(userSocketId).emit('admin_reply_image', `data:image/jpeg;base64,${base64Image}`);
                     if (message.caption) io.to(userSocketId).emit('admin_reply', message.caption);
-                    console.log("📸 Đã đẩy ảnh về Chatbot");
                 } else if (message.text) {
                     io.to(userSocketId).emit('admin_reply', message.text);
-                    console.log("💬 Đã đẩy tin nhắn về Chatbot");
                 }
             } else {
-                console.error("❌ LỖI: Không tìm thấy ID này trong bộ nhớ (Server có thể vừa Restart)");
+                console.error("❌ LỖI: Tin nhắn này không chứa SocketID hợp lệ.");
             }
-        } else {
-            console.log("ℹ️ Tin nhắn nhận được không phải là tin nhắn Reply.");
         }
         res.sendStatus(200);
     } catch (e) {
-        console.error("❌ Lỗi Webhook hệ thống:", e.message);
+        console.error("❌ Lỗi Webhook:", e.message);
         res.sendStatus(500);
     }
 });
