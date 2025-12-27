@@ -227,19 +227,24 @@ app.post('/api/chat', async (req, res) => {
         });
 
         const systemPrompt = `
-            Dựa trên dữ liệu sau:
+            Bối cảnh: Bạn là một trợ lý trích lục dữ liệu trung thực.
+            Dữ liệu nguồn (Context): 
             ${contextString}
 
-            NHIỆM VỤ: Trích xuất thông tin trả lời cho câu hỏi: "${fullQuestion}".
+            NHIỆM VỤ: Tìm kiếm và trích xuất thông tin cho câu hỏi: "${fullQuestion}".
 
-            QUY TẮC TRÌNH BÀY NGHIÊM NGẶT:
-            1. KHÔNG chào hỏi, KHÔNG kết luận, KHÔNG tự suy diễn lung tung.
-            2. Trình bày danh sách bài viết theo cấu trúc:
-               - [Ý chính của bài viết liên quan đến câu hỏi]
-               [Trích dẫn đoạn nội dung liên quan nhất từ bài viết đó]
-               [Chỉ dán URL bài viết vào đây - KHÔNG THÊM CHỮ "Link:" hay bất kỳ chữ nào khác]
-            3. Mỗi bài viết cách nhau bởi một dòng trống.
-            4. Nếu dữ liệu hoàn toàn không khớp, trả về duy nhất chữ: NO_DATA
+            QUY TẮC CỐT LÕI (PHẢI TUÂN THỦ):
+            1. TRUNG THỰC TUYỆT ĐỐI: Chỉ sử dụng thông tin có trong "Dữ liệu nguồn". Tuyệt đối KHÔNG dùng kiến thức bên ngoài, KHÔNG tự ý suy luận.
+            2. KHÔNG VIẾT LẠI: Không được diễn giải (paraphrase) theo ý mình. Hãy TRÍCH DẪN NGUYÊN VĂN các câu văn quan trọng từ bài viết.
+            3. KHÔNG XUYÊN TẠC: Giữ nguyên văn phong và từ ngữ của bản gốc.
+            4. CẤU TRÚC TRẢ VỀ (CHỈ BAO GỒM):
+               - [Tên bài viết hoặc ý chính ngắn gọn]
+               [Một đoạn trích dẫn nguyên văn từ nội dung bài viết liên quan đến câu hỏi]
+               [Dán trực tiếp URL bài viết vào dòng này - KHÔNG THÊM BẤT KỲ CHỮ NÀO KHÁC]
+
+            LƯU Ý: 
+            - KHÔNG chào hỏi, KHÔNG kết luận.
+            - Nếu không tìm thấy thông tin khớp hoàn toàn trong dữ liệu, trả về duy nhất: NO_DATA
         `;
 
         const response = await callGeminiWithRetry(
@@ -265,29 +270,51 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // --- API WEBHOOK: ADMIN REPLY TỪ TELEGRAM ---
-app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
+app.post('/api/telegram-webhook', async (req, res) => {
     try {
         const { message } = req.body;
+        console.log("📩 Nhận dữ liệu từ Telegram..."); // Log để kiểm tra Webhook có chạy không
+
         if (message && message.reply_to_message) {
             const originalMsgId = message.reply_to_message.message_id; 
+            console.log("🔍 Đang tìm Socket cho Message ID:", originalMsgId);
+
             if (pendingRequests.has(originalMsgId)) {
                 const userSocketId = pendingRequests.get(originalMsgId);
+                console.log("✅ Tìm thấy Socket ID:", userSocketId);
+
+                // Xử lý Gửi Ảnh
                 if (message.photo) {
-                    const fileId = message.photo[message.photo.length - 1].file_id;
-                    const getFileUrl = `https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/getFile?file_id=${fileId}`;
-                    const fileInfoRes = await axios.get(getFileUrl);
-                    const downloadUrl = `https://api.telegram.org/file/bot${process.env.TELEGRAM_TOKEN}/${fileInfoRes.data.result.file_path}`;
-                    const imageRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
-                    const base64Image = Buffer.from(imageRes.data, 'binary').toString('base64');
-                    io.to(userSocketId).emit('admin_reply_image', `data:image/jpeg;base64,${base64Image}`);
-                    if (message.caption) io.to(userSocketId).emit('admin_reply', message.caption);
-                } else if (message.text) {
+                    try {
+                        const fileId = message.photo[message.photo.length - 1].file_id;
+                        const getFileUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`;
+                        const fileInfoRes = await axios.get(getFileUrl);
+                        const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfoRes.data.result.file_path}`;
+                        
+                        const imageRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+                        const base64Image = Buffer.from(imageRes.data, 'binary').toString('base64');
+                        
+                        io.to(userSocketId).emit('admin_reply_image', `data:image/jpeg;base64,${base64Image}`);
+                        if (message.caption) io.to(userSocketId).emit('admin_reply', message.caption);
+                        console.log("📸 Đã gửi ảnh về Chatbot");
+                    } catch (e) {
+                        console.error("❌ Lỗi tải ảnh:", e.message);
+                    }
+                } 
+                // Xử lý Gửi Tin nhắn văn bản
+                else if (message.text) {
                     io.to(userSocketId).emit('admin_reply', message.text);
+                    console.log("💬 Đã gửi tin nhắn về Chatbot:", message.text);
                 }
+            } else {
+                console.log("⚠️ Không tìm thấy Socket ID cho tin nhắn này (Có thể user đã ngắt kết nối hoặc server khởi động lại)");
             }
         }
         res.sendStatus(200); 
-    } catch (e) { res.sendStatus(500); }
+    } catch (e) {
+        console.error("❌ Lỗi Webhook:", e.message);
+        res.sendStatus(500);
+    }
 });
 
 app.get('/api/health', (req, res) => res.send("Server Hashnode-Chatbot is Online!"));
