@@ -110,6 +110,13 @@ async function searchHashnode(query) {
                 'Content-Type': 'application/json'
             }
         });
+
+        // Kiểm tra nếu API trả về lỗi trong body (thường gặp ở GraphQL)
+        if (response.data.errors) {
+            console.error("❌ Lỗi GraphQL chi tiết:", JSON.stringify(response.data.errors, null, 2));
+            return [];
+        }
+
         const edges = response.data?.data?.publication?.searchPosts?.edges || [];
         return edges.map(edge => ({
             title: edge.node.title,
@@ -117,6 +124,10 @@ async function searchHashnode(query) {
             content: edge.node.content.text
         }));
     } catch (error) {
+        // Log chi tiết phản hồi từ Server để tìm nguyên nhân lỗi 400
+        if (error.response) {
+            console.error("❌ Hashnode Error Data:", JSON.stringify(error.response.data, null, 2));
+        }
         console.error("Lỗi Hashnode API:", error.message);
         return [];
     }
