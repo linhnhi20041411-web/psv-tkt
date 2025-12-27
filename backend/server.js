@@ -209,19 +209,23 @@ app.post('/api/chat', async (req, res) => {
         // 3. Gemini xử lý và định dạng kết quả
         let contextString = "";
         documents.forEach((doc, index) => {
-            contextString += `Bài #${index + 1}: ${doc.title}\nLink: ${doc.url}\nNội dung: ${doc.content.substring(0, 1500)}\n\n`;
+            contextString += `Bài #${index + 1}: ${doc.title}\nLink: ${doc.url}\nNội dung: ${doc.content.substring(0, 2000)}\n\n`;
         });
 
         const systemPrompt = `
             NHIỆM VỤ: Trích xuất thông tin trả lời cho câu hỏi: "${fullQuestion}".
-            DỮ LIỆU TỪ HASHNODE:
+            DỮ LIỆU THAM KHẢO TỪ HASHNODE:
             ${contextString}
 
-            YÊU CẦU:
-            1. Trình bày ý chính theo gạch đầu dòng.
-            2. Dưới mỗi ý chính BẮT BUỘC ghi rõ tiêu đề bài và dán link bài gốc.
+            YÊU CẦU TRÌNH BÀY:
+            1. Trình bày các ý chính tìm thấy dưới dạng danh sách gạch đầu dòng (-).
+            2. Ngay bên dưới mỗi ý, hãy dán trực tiếp link bài viết đó (Chỉ dán link, tuyệt đối KHÔNG thêm chữ "Link:", "Nguồn:" hay bất kỳ nhãn nào khác trước URL).
             3. Dùng giọng văn khiêm cung (Đệ - Sư huynh).
-            4. Trả về định dạng text sạch sẽ.
+            4. Trình bày súc tích, đi thẳng vào vấn đề.
+
+            VÍ DỤ MẪU:
+            - Nội dung khai thị về Ngôi nhà nhỏ...
+            https://blog.pmtl.site/ngoi-nha-nho-la-gi-586
         `;
 
         const response = await callGeminiWithRetry(
