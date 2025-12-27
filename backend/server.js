@@ -251,8 +251,8 @@ app.post('/api/chat', async (req, res) => {
 
         // Xử lý dự phòng nếu AI trả về NO_DATA
         if (aiBody.includes("NO_DATA")) {
-            await sendTelegramAlert(`❓ <b>AI KHÔNG TRÍCH XUẤT ĐƯỢC</b>\n\nUser: "${escapeHtml(question)}"`);
-            return res.json({ answer: "Đệ tìm thấy bài viết nhưng không trích xuất được ý phù hợp. Đệ đã báo Admin hỗ trợ Sư huynh rồi ạ!" });
+            await sendTelegramAlert(`❓ <b>Phụng Sự Viên Văn Tư Tu</b>\n\nUser: "${escapeHtml(question)}"`);
+            return res.json({ answer: "Đệ tìm nhưng trên blog chưa có thông tin này. Đệ đã báo các Sư huynh trong ban Hộ Trì hỗ trợ Sư huynh rồi ạ!" });
         }
 
         // Trả về kết quả cuối cùng theo khung Sư huynh muốn
