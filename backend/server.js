@@ -270,49 +270,42 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // --- API WEBHOOK: ADMIN REPLY TỪ TELEGRAM ---
-app.post('/api/telegram-webhook', async (req, res) => {
+app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res) => {
     try {
         const { message } = req.body;
-        console.log("📩 Nhận dữ liệu từ Telegram..."); // Log để kiểm tra Webhook có chạy không
+        console.log("📩 Webhook nhận dữ liệu!");
 
         if (message && message.reply_to_message) {
-            const originalMsgId = message.reply_to_message.message_id; 
-            console.log("🔍 Đang tìm Socket cho Message ID:", originalMsgId);
+            const originalMsgId = message.reply_to_message.message_id;
+            console.log("🔍 Tìm Socket cho MsgID:", originalMsgId);
 
             if (pendingRequests.has(originalMsgId)) {
                 const userSocketId = pendingRequests.get(originalMsgId);
-                console.log("✅ Tìm thấy Socket ID:", userSocketId);
+                console.log("✅ Khớp SocketID:", userSocketId);
 
-                // Xử lý Gửi Ảnh
                 if (message.photo) {
-                    try {
-                        const fileId = message.photo[message.photo.length - 1].file_id;
-                        const getFileUrl = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`;
-                        const fileInfoRes = await axios.get(getFileUrl);
-                        const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileInfoRes.data.result.file_path}`;
-                        
-                        const imageRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
-                        const base64Image = Buffer.from(imageRes.data, 'binary').toString('base64');
-                        
-                        io.to(userSocketId).emit('admin_reply_image', `data:image/jpeg;base64,${base64Image}`);
-                        if (message.caption) io.to(userSocketId).emit('admin_reply', message.caption);
-                        console.log("📸 Đã gửi ảnh về Chatbot");
-                    } catch (e) {
-                        console.error("❌ Lỗi tải ảnh:", e.message);
-                    }
-                } 
-                // Xử lý Gửi Tin nhắn văn bản
-                else if (message.text) {
+                    const fileId = message.photo[message.photo.length - 1].file_id;
+                    const fileRes = await axios.get(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/getFile?file_id=${fileId}`);
+                    const downloadUrl = `https://api.telegram.org/file/bot${TELEGRAM_TOKEN}/${fileRes.data.result.file_path}`;
+                    const imgRes = await axios.get(downloadUrl, { responseType: 'arraybuffer' });
+                    const base64Image = Buffer.from(imgRes.data, 'binary').toString('base64');
+                    
+                    io.to(userSocketId).emit('admin_reply_image', `data:image/jpeg;base64,${base64Image}`);
+                    if (message.caption) io.to(userSocketId).emit('admin_reply', message.caption);
+                    console.log("📸 Đã đẩy ảnh về Chatbot");
+                } else if (message.text) {
                     io.to(userSocketId).emit('admin_reply', message.text);
-                    console.log("💬 Đã gửi tin nhắn về Chatbot:", message.text);
+                    console.log("💬 Đã đẩy tin nhắn về Chatbot");
                 }
             } else {
-                console.log("⚠️ Không tìm thấy Socket ID cho tin nhắn này (Có thể user đã ngắt kết nối hoặc server khởi động lại)");
+                console.error("❌ LỖI: Không tìm thấy ID này trong bộ nhớ (Server có thể vừa Restart)");
             }
+        } else {
+            console.log("ℹ️ Tin nhắn nhận được không phải là tin nhắn Reply.");
         }
-        res.sendStatus(200); 
+        res.sendStatus(200);
     } catch (e) {
-        console.error("❌ Lỗi Webhook:", e.message);
+        console.error("❌ Lỗi Webhook hệ thống:", e.message);
         res.sendStatus(500);
     }
 });
