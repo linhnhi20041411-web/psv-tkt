@@ -79,56 +79,70 @@ async function sendTelegramAlert(message) {
     } catch (error) { console.error("Telegram Error:", error.message); }
 }
 
-// --- HÀM TÌM KIẾM HASHNODE (GraphQL) ---
+// --- HÀM TÌM KIẾM HASHNODE (CẬP NHẬT CHUẨN SCHEMA V2) ---
 async function searchHashnode(query) {
+    const cleanApiKey = String(process.env.HASHNODE_API_KEY || "").trim();
+    const cleanPubId = String(process.env.HASHNODE_PUBLICATION_ID || "").trim();
+    const cleanQuery = String(query || "").trim();
+
+    if (!cleanApiKey || !cleanPubId) {
+        console.error("❌ LỖI: Thiếu API KEY hoặc PUBLICATION ID");
+        return [];
+    }
+
+    // Cấu trúc Query mới: searchPostsOfPublication nằm ở cấp cao nhất
     const graphqlQuery = {
         query: `
-            query SearchPosts($publicationId: ObjectId!, $query: String!) {
-              publication(id: $publicationId) {
-                searchPosts(query: $query, first: 5) {
-                  edges {
-                    node {
-                      title
-                      url
-                      content { text }
+            query SearchPostsOfPublication($first: Int!, $filter: SearchPostsOfPublicationFilter!) {
+                searchPostsOfPublication(first: $first, filter: $filter) {
+                    edges {
+                        node {
+                            title
+                            url
+                            content {
+                                text
+                            }
+                        }
                     }
-                  }
                 }
-              }
             }
         `,
         variables: {
-            publicationId: HASHNODE_PUBLICATION_ID,
-            query: query
+            first: 5,
+            filter: {
+                publicationId: cleanPubId,
+                query: cleanQuery
+            }
         }
     };
 
     try {
         const response = await axios.post('https://gql.hashnode.com/', graphqlQuery, {
             headers: {
-                'Authorization': HASHNODE_API_KEY,
+                'Authorization': cleanApiKey,
                 'Content-Type': 'application/json'
-            }
+            },
+            timeout: 15000
         });
 
-        // Kiểm tra nếu API trả về lỗi trong body (thường gặp ở GraphQL)
         if (response.data.errors) {
             console.error("❌ Lỗi GraphQL chi tiết:", JSON.stringify(response.data.errors, null, 2));
             return [];
         }
 
-        const edges = response.data?.data?.publication?.searchPosts?.edges || [];
+        // Cập nhật cách lấy dữ liệu theo cấu trúc mới
+        const edges = response.data?.data?.searchPostsOfPublication?.edges || [];
         return edges.map(edge => ({
             title: edge.node.title,
             url: edge.node.url,
-            content: edge.node.content.text
+            content: edge.node.content?.text || ""
         }));
     } catch (error) {
-        // Log chi tiết phản hồi từ Server để tìm nguyên nhân lỗi 400
         if (error.response) {
-            console.error("❌ Hashnode Error Data:", JSON.stringify(error.response.data, null, 2));
+            console.error("❌ Hashnode API Error:", JSON.stringify(error.response.data, null, 2));
+        } else {
+            console.error("❌ Lỗi kết nối Hashnode:", error.message);
         }
-        console.error("Lỗi Hashnode API:", error.message);
         return [];
     }
 }
