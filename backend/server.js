@@ -29,8 +29,9 @@ const rawKeys = process.env.GEMINI_API_KEYS || "";
 const apiKeys = rawKeys.split(',').map(key => key.trim()).filter(key => key.length > 0);
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN || ""; 
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "";
-const HASHNODE_API_KEY = process.env.HASHNODE_API_KEY;
-const HASHNODE_PUBLICATION_ID = process.env.HASHNODE_PUBLICATION_ID;
+// --- CẤU HÌNH GHOST CMS ---
+const GHOST_API_URL = process.env.GHOST_API_URL || "";
+const GHOST_CONTENT_API_KEY = process.env.GHOST_CONTENT_API_KEY || "";
 
 // --- TỪ ĐIỂN VIẾT TẮT ---
 const TU_DIEN_VIET_TAT = {
@@ -62,42 +63,35 @@ function escapeHtml(text) {
     return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-// --- HÀM TÌM KIẾM HASHNODE ---
-async function searchHashnode(query) {
-    const cleanApiKey = String(process.env.HASHNODE_API_KEY || "").trim();
-    const cleanPubId = String(process.env.HASHNODE_PUBLICATION_ID || "").trim();
-    const cleanQuery = String(query || "").trim();
-
-    const graphqlQuery = {
-        query: `
-            query SearchPostsOfPublication($first: Int!, $filter: SearchPostsOfPublicationFilter!) {
-                searchPostsOfPublication(first: $first, filter: $filter) {
-                    edges {
-                        node {
-                            title
-                            url
-                            content { text }
-                        }
-                    }
-                }
-            }
-        `,
-        variables: { first: 5, filter: { publicationId: cleanPubId, query: cleanQuery } }
-    };
+// --- HÀM TÌM KIẾM GHOST CMS ---
+async function searchGhost(query) {
+    const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, ""); // Xóa dấu '/' ở cuối nếu có
+    const cleanApiKey = String(GHOST_CONTENT_API_KEY).trim();
+    const cleanQuery = String(query || "").trim().toLowerCase();
 
     try {
-        const response = await axios.post('https://gql.hashnode.com/', graphqlQuery, {
-            headers: { 'Authorization': cleanApiKey, 'Content-Type': 'application/json' },
-            timeout: 15000
+        // Gọi Ghost API lấy bài viết. 
+        // limit=all (hoặc 'all' nếu blog nhỏ) và lấy formats=plaintext để AI dễ đọc.
+        const apiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&limit=all&formats=plaintext`;
+        
+        const response = await axios.get(apiUrl, { timeout: 15000 });
+        const posts = response.data?.posts || [];
+
+        // Vì Ghost API không có native search, đệ tiến hành lọc bài viết có chứa từ khóa
+        const matchedPosts = posts.filter(post => {
+            const titleMatch = post.title && post.title.toLowerCase().includes(cleanQuery);
+            const contentMatch = post.plaintext && post.plaintext.toLowerCase().includes(cleanQuery);
+            return titleMatch || contentMatch;
         });
-        const edges = response.data?.data?.searchPostsOfPublication?.edges || [];
-        return edges.map(edge => ({
-            title: edge.node.title,
-            url: edge.node.url,
-            content: edge.node.content?.text || ""
+
+        // Trả về tối đa 5 bài tốt nhất để tránh vượt quá limit token của Gemini
+        return matchedPosts.slice(0, 5).map(post => ({
+            title: post.title,
+            url: post.url,
+            content: post.plaintext ? post.plaintext.substring(0, 2000) : ""
         }));
     } catch (error) {
-        console.error("Lỗi Hashnode API:", error.message);
+        console.error("Lỗi Ghost API:", error.message);
         return [];
     }
 }
@@ -146,7 +140,7 @@ app.post('/api/chat', async (req, res) => {
 
         // 2. TÌM KIẾM DỮ LIỆU TRÊN HASHNODE
         const fullQuestion = dichVietTat(question);
-        const documents = await searchHashnode(fullQuestion);
+        const documents = await searchGhost(fullQuestion);
 
         const HEADER_MSG = "Đệ chào Sư huynh , dưới đây là toàn bộ dữ liệu mà đệ tìm được trên Blog ạ :\n\n";
         const FOOTER_MSG = "\n\nSư huynh cần đệ giúp gì xin cứ đặt câu hỏi nhé !";
