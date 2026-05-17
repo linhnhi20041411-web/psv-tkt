@@ -208,12 +208,20 @@ app.post('/api/chat', async (req, res) => {
         let aiBody = response.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "NO_DATA";
 
         if (aiBody.includes("NO_DATA")) {
+            // 1. Vẫn gửi tin nhắn báo cho Admin biết để hỗ trợ nếu cần
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                 chat_id: TELEGRAM_CHAT_ID,
-                text: `❓ <b>AI KHÔNG TRÍCH XUẤT ĐƯỢC</b>\nUser: "${escapeHtml(question)}"\n\n<code>#id_${socketId}</code>`,
+                text: `❓ <b>AI KHÔNG THỂ TRÍCH DẪN NGUYÊN VĂN</b>\nUser: "${escapeHtml(question)}"\n\n<code>#id_${socketId}</code>`,
                 parse_mode: 'HTML'
             });
-            return res.json({ answer: "Đệ tìm thấy bài viết nhưng nội dung chưa sát. Đệ đã báo Admin hỗ trợ ạ!" });
+
+            // 2. Trả về danh sách bài viết liên quan để user tự tham khảo
+            let suggestMsg = "Đệ chưa tìm được đoạn trích dẫn nguyên văn sát với câu hỏi. Tuy nhiên đệ thấy có các bài viết liên quan sau đây, Sư huynh bấm vào link để đọc tham khảo nhé ạ:\n\n";
+            documents.forEach((doc, index) => {
+                suggestMsg += `* [${doc.title}]\nLink: ${doc.url}\n\n`;
+            });
+
+            return res.json({ answer: HEADER_MSG + suggestMsg + FOOTER_MSG });
         }
 
         res.json({ answer: HEADER_MSG + aiBody + FOOTER_MSG });
