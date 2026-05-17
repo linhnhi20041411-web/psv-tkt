@@ -63,28 +63,26 @@ function escapeHtml(text) {
     return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-// --- HÀM TÌM KIẾM GHOST CMS ---
+// --- HÀM TÌM KIẾM GHOST CMS (CẬP NHẬT TỐI ƯU) ---
 async function searchGhost(query) {
-    const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, ""); // Xóa dấu '/' ở cuối nếu có
+    const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, "");
     const cleanApiKey = String(GHOST_CONTENT_API_KEY).trim();
     const cleanQuery = String(query || "").trim().toLowerCase();
 
     try {
-        // Gọi Ghost API lấy bài viết. 
-        // limit=all (hoặc 'all' nếu blog nhỏ) và lấy formats=plaintext để AI dễ đọc.
-        const apiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&limit=all&formats=plaintext`;
+        // Tối ưu: Giảm limit xuống 20-30, chỉ lấy các trường cần thiết (title, url, plaintext)
+        const apiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&limit=30&formats=plaintext&fields=id,title,url,plaintext`;
         
-        const response = await axios.get(apiUrl, { timeout: 15000 });
+        // Tăng timeout lên 30000ms (30 giây)
+        const response = await axios.get(apiUrl, { timeout: 30000 });
         const posts = response.data?.posts || [];
 
-        // Vì Ghost API không có native search, đệ tiến hành lọc bài viết có chứa từ khóa
         const matchedPosts = posts.filter(post => {
             const titleMatch = post.title && post.title.toLowerCase().includes(cleanQuery);
             const contentMatch = post.plaintext && post.plaintext.toLowerCase().includes(cleanQuery);
             return titleMatch || contentMatch;
         });
 
-        // Trả về tối đa 5 bài tốt nhất để tránh vượt quá limit token của Gemini
         return matchedPosts.slice(0, 5).map(post => ({
             title: post.title,
             url: post.url,
