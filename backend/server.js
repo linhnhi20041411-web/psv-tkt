@@ -63,26 +63,48 @@ function escapeHtml(text) {
     return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-// --- HÀM TÌM KIẾM GHOST CMS (CẬP NHẬT TỐI ƯU) ---
+// --- HÀM TÌM KIẾM GHOST CMS (CẢI TIẾN THÔNG MINH BẰNG TỪ KHÓA) ---
 async function searchGhost(query) {
     const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, "");
     const cleanApiKey = String(GHOST_CONTENT_API_KEY).trim();
     const cleanQuery = String(query || "").trim().toLowerCase();
 
     try {
-        // Tối ưu: Giảm limit xuống 20-30, chỉ lấy các trường cần thiết (title, url, plaintext)
-        const apiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&limit=30&formats=plaintext&fields=id,title,url,plaintext`;
+        // Lấy tất cả bài viết (hoặc limit=50 nếu blog quá lớn) để lọc
+        const apiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&limit=all&formats=plaintext&fields=id,title,url,plaintext`;
         
-        // Tăng timeout lên 30000ms (30 giây)
         const response = await axios.get(apiUrl, { timeout: 30000 });
         const posts = response.data?.posts || [];
 
-        const matchedPosts = posts.filter(post => {
-            const titleMatch = post.title && post.title.toLowerCase().includes(cleanQuery);
-            const contentMatch = post.plaintext && post.plaintext.toLowerCase().includes(cleanQuery);
-            return titleMatch || contentMatch;
+        // 1. Tách câu hỏi của user thành từng từ khóa riêng lẻ
+        // Ví dụ: "bị tê khi niệm kinh" -> ["bị", "tê", "khi", "niệm", "kinh"]
+        const keywords = cleanQuery.split(/\s+/).filter(word => word.length > 0);
+
+        // 2. Chấm điểm mức độ liên quan cho từng bài viết
+        const scoredPosts = posts.map(post => {
+            const title = (post.title || "").toLowerCase();
+            const content = (post.plaintext || "").toLowerCase();
+            let score = 0;
+
+            // Thưởng điểm RẤT CAO nếu khớp nguyên văn cả cụm (phòng trường hợp gõ chuẩn)
+            if (title.includes(cleanQuery)) score += 50;
+            if (content.includes(cleanQuery)) score += 20;
+
+            // Thưởng điểm cho MỖI từ khóa xuất hiện trong bài
+            keywords.forEach(kw => {
+                if (title.includes(kw)) score += 5; // Từ khóa có trong tiêu đề: +5 điểm
+                if (content.includes(kw)) score += 1; // Từ khóa có trong nội dung: +1 điểm
+            });
+
+            return { ...post, score };
         });
 
+        // 3. Lọc bỏ các bài điểm quá thấp (< 3) và Sắp xếp điểm từ cao xuống thấp
+        const matchedPosts = scoredPosts
+            .filter(post => post.score > 3)
+            .sort((a, b) => b.score - a.score);
+
+        // 4. Chỉ trả về 5 bài có điểm cao nhất cho Gemini đọc
         return matchedPosts.slice(0, 5).map(post => ({
             title: post.title,
             url: post.url,
