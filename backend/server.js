@@ -5,15 +5,6 @@ const http = require('http');
 const { Server } = require("socket.io");
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 require('dotenv').config();
-const algoliasearch = require('algoliasearch');
-
-// Cấu hình Algolia
-const ALGOLIA_APP_ID = process.env.ALGOLIA_APP_ID || "";
-const ALGOLIA_SEARCH_KEY = process.env.ALGOLIA_SEARCH_KEY || "";
-const ALGOLIA_INDEX_NAME = process.env.ALGOLIA_INDEX || "";
-
-const algoliaClient = algoliasearch(ALGOLIA_APP_ID, ALGOLIA_SEARCH_KEY);
-const algoliaIndex = algoliaClient.initIndex(ALGOLIA_INDEX_NAME);
 
 const app = express();
 
@@ -72,46 +63,55 @@ function escapeHtml(text) {
     return String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
 
-// --- HÀM TÌM KIẾM HYBRID (ALGOLIA + GHOST) ---
-async function searchAlgolia(query) {
-    const cleanQuery = String(query || "").trim();
-    if (!cleanQuery) return [];
+// --- HÀM TÌM KIẾM GHOST CMS (CẢI TIẾN THÔNG MINH BẰNG TỪ KHÓA) ---
+async function searchGhost(query) {
+    const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, "");
+    const cleanApiKey = String(GHOST_CONTENT_API_KEY).trim();
+    const cleanQuery = String(query || "").trim().toLowerCase();
 
     try {
-        // BƯỚC 1: Dùng Algolia tìm kiếm siêu tốc lấy 5 kết quả chuẩn nhất
-        const searchResult = await algoliaIndex.search(cleanQuery, {
-            hitsPerPage: 5,
-            attributesToRetrieve: ['objectID', 'url', 'title'] // Chỉ lấy ID và link để tối ưu tốc độ
-        });
-
-        const hits = searchResult.hits;
-        if (hits.length === 0) return []; // Không tìm thấy gì
-
-        // BƯỚC 2: Gọi Ghost API để lấy toàn văn nội dung (plaintext) của đúng 5 bài đó
-        const ids = hits.map(hit => hit.objectID).join(','); // Ghép ID thành chuỗi: id1,id2,id3
+        // Lấy tất cả bài viết (hoặc limit=50 nếu blog quá lớn) để lọc
+        const apiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&limit=all&formats=plaintext&fields=id,title,url,plaintext`;
         
-        const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, "");
-        const cleanApiKey = String(GHOST_CONTENT_API_KEY).trim();
-        // Cú pháp filter của Ghost: filter=id:[id1,id2,id3]
-        const ghostApiUrl = `${cleanApiUrl}/ghost/api/content/posts/?key=${cleanApiKey}&filter=id:[${ids}]&formats=plaintext&fields=id,title,url,plaintext`;
-
-        const response = await axios.get(ghostApiUrl, { timeout: 30000 });
+        const response = await axios.get(apiUrl, { timeout: 30000 });
         const posts = response.data?.posts || [];
 
-        // BƯỚC 3: Ráp nội dung vào đúng thứ tự ưu tiên mà Algolia đã xếp hạng
-        const finalDocs = hits.map(hit => {
-            const fullPost = posts.find(p => p.id === hit.objectID);
-            return {
-                title: hit.title,
-                url: hit.url,
-                content: fullPost && fullPost.plaintext ? fullPost.plaintext.substring(0, 2000) : ""
-            };
+        // 1. Tách câu hỏi của user thành từng từ khóa riêng lẻ
+        // Ví dụ: "bị tê khi niệm kinh" -> ["bị", "tê", "khi", "niệm", "kinh"]
+        const keywords = cleanQuery.split(/\s+/).filter(word => word.length > 0);
+
+        // 2. Chấm điểm mức độ liên quan cho từng bài viết
+        const scoredPosts = posts.map(post => {
+            const title = (post.title || "").toLowerCase();
+            const content = (post.plaintext || "").toLowerCase();
+            let score = 0;
+
+            // Thưởng điểm RẤT CAO nếu khớp nguyên văn cả cụm (phòng trường hợp gõ chuẩn)
+            if (title.includes(cleanQuery)) score += 50;
+            if (content.includes(cleanQuery)) score += 20;
+
+            // Thưởng điểm cho MỖI từ khóa xuất hiện trong bài
+            keywords.forEach(kw => {
+                if (title.includes(kw)) score += 5; // Từ khóa có trong tiêu đề: +5 điểm
+                if (content.includes(kw)) score += 1; // Từ khóa có trong nội dung: +1 điểm
+            });
+
+            return { ...post, score };
         });
 
-        return finalDocs;
+        // 3. Lọc bỏ các bài điểm quá thấp (< 3) và Sắp xếp điểm từ cao xuống thấp
+        const matchedPosts = scoredPosts
+            .filter(post => post.score > 3)
+            .sort((a, b) => b.score - a.score);
 
+        // 4. Chỉ trả về 5 bài có điểm cao nhất cho Gemini đọc
+        return matchedPosts.slice(0, 5).map(post => ({
+            title: post.title,
+            url: post.url,
+            content: post.plaintext ? post.plaintext.substring(0, 2000) : ""
+        }));
     } catch (error) {
-        console.error("Lỗi Algolia/Ghost API:", error.message);
+        console.error("Lỗi Ghost API:", error.message);
         return [];
     }
 }
@@ -160,7 +160,7 @@ app.post('/api/chat', async (req, res) => {
 
         // 2. TÌM KIẾM DỮ LIỆU TRÊN HASHNODE
         const fullQuestion = dichVietTat(question);
-        const documents = await searchAlgolia(fullQuestion);
+        const documents = await searchGhost(fullQuestion);
 
         const HEADER_MSG = "Đệ chào Sư huynh , dưới đây là toàn bộ dữ liệu mà đệ tìm được trên Blog ạ :\n\n";
         const FOOTER_MSG = "\n\nSư huynh cần đệ giúp gì xin cứ đặt câu hỏi nhé !";
