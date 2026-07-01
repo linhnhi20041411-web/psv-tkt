@@ -219,10 +219,20 @@ app.post('/api/chat', async (req, res) => {
         // Tạo thông báo về Chuyên đề (Tag) nếu có
         let TAG_MSG = "";
         if (matchedTags && matchedTags.length > 0) {
-            // Lấy tag đầu tiên tìm được để giới thiệu
-            TAG_MSG = `📚 **Chuyên đề liên quan:** Đệ thấy Sư huynh đang quan tâm đến chủ đề **${matchedTags[0].name}**. Sư huynh có thể xem tổng hợp toàn bộ bài viết của chuyên đề này tại đây nhé:\n👉 Link: ${matchedTags[0].url}\n\n---\n\n`;
+            // Nếu chỉ tìm thấy 1 chuyên đề
+            if (matchedTags.length === 1) {
+                TAG_MSG = `📚 **Chuyên đề liên quan:** Đệ thấy Sư huynh đang quan tâm đến chủ đề **${matchedTags[0].name}**. Sư huynh có thể xem tổng hợp toàn bộ bài viết tại đây nhé:\n👉 Link: ${matchedTags[0].url}\n\n---\n\n`;
+            } 
+            // Nếu tìm thấy từ 2 chuyên đề trở lên
+            else {
+                TAG_MSG = `📚 **Các chuyên đề liên quan:** Đệ thấy câu hỏi của Sư huynh liên quan đến nhiều chủ đề. Sư huynh có thể xem tổng hợp các bài viết theo từng chuyên đề dưới đây nhé:\n`;
+                matchedTags.forEach(tag => {
+                    TAG_MSG += `👉 **${tag.name}**: ${tag.url}\n`;
+                });
+                TAG_MSG += `\n---\n\n`;
+            }
         }
-
+        
         // --- XỬ LÝ KHI KHÔNG TÌM THẤY CẢ BÀI VIẾT LẪN CHUYÊN ĐỀ ---
         if ((!documents || documents.length === 0) && matchedTags.length === 0) {
             const safeUserQ = escapeHtml(question);
