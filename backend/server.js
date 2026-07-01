@@ -204,15 +204,27 @@ app.post('/api/chat', async (req, res) => {
             return res.json({ answer: "✅ Đệ đã chuyển tin nhắn riêng tới Ban quản trị ạ! 🙏" });
         }
 
-        // 2. TÌM KIẾM DỮ LIỆU TRÊN HASHNODE
+        // 2. TÌM KIẾM DỮ LIỆU TRÊN GHOST CMS (Cả bài lẻ & Tags)
         const fullQuestion = dichVietTat(question);
-        const documents = await searchGhost(fullQuestion);
+        
+        // Chạy song song 2 hàm tìm kiếm để tiết kiệm thời gian phản hồi
+        const [documents, matchedTags] = await Promise.all([
+            searchGhost(fullQuestion),
+            searchGhostTags(fullQuestion)
+        ]);
 
-        const HEADER_MSG = "Đệ chào Sư huynh , dưới đây là toàn bộ dữ liệu mà đệ tìm được trên Blog ạ :\n\n";
-        const FOOTER_MSG = "\n\nSư huynh cần đệ giúp gì xin cứ đặt câu hỏi nhé !";
+        const HEADER_MSG = "Đệ chào Sư huynh, dưới đây là thông tin đệ tìm được ạ:\n\n";
+        const FOOTER_MSG = "\n\nSư huynh cần đệ giúp gì xin cứ đặt câu hỏi nhé!";
 
-        // --- XỬ LÝ KHI KHÔNG TÌM THẤY DỮ LIỆU ---
-        if (!documents || documents.length === 0) {
+        // Tạo thông báo về Chuyên đề (Tag) nếu có
+        let TAG_MSG = "";
+        if (matchedTags && matchedTags.length > 0) {
+            // Lấy tag đầu tiên tìm được để giới thiệu
+            TAG_MSG = `📚 **Chuyên đề liên quan:** Đệ thấy Sư huynh đang quan tâm đến chủ đề **${matchedTags[0].name}**. Sư huynh có thể xem tổng hợp toàn bộ bài viết của chuyên đề này tại đây nhé:\n👉 Link: ${matchedTags[0].url}\n\n---\n\n`;
+        }
+
+        // --- XỬ LÝ KHI KHÔNG TÌM THẤY CẢ BÀI VIẾT LẪN CHUYÊN ĐỀ ---
+        if ((!documents || documents.length === 0) && matchedTags.length === 0) {
             const safeUserQ = escapeHtml(question);
             await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
                 chat_id: TELEGRAM_CHAT_ID,
@@ -225,12 +237,17 @@ app.post('/api/chat', async (req, res) => {
             });
         }
 
-        // 3. NẾU CÓ DỮ LIỆU: Gọi Gemini trích dẫn nguyên văn
+        // Nếu chỉ tìm thấy TAG mà không có bài viết lẻ cụ thể khớp điểm cao
+        if (!documents || documents.length === 0) {
+            return res.json({ answer: HEADER_MSG + TAG_MSG + FOOTER_MSG });
+        }
+
+        // 3. NẾU CÓ DỮ LIỆU BÀI LẺ: Gọi Gemini trích dẫn nguyên văn
         let contextString = "";
         documents.forEach((doc, index) => {
             contextString += `Bài #${index + 1}: ${doc.title}\nLink: ${doc.url}\nNội dung: ${doc.content.substring(0, 2000)}\n\n`;
         });
-
+        
         const systemPrompt = `
             Bối cảnh: Bạn là một trợ lý trích lục dữ liệu trung thực.
             Dữ liệu nguồn (Context): ${contextString}
