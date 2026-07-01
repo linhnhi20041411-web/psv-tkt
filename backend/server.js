@@ -35,12 +35,29 @@ const GHOST_CONTENT_API_KEY = process.env.GHOST_CONTENT_API_KEY || "";
 
 // --- TỪ ĐIỂN VIẾT TẮT ---
 const TU_DIEN_VIET_TAT = {
-    "pmtl": "Pháp Môn Tâm Linh", "btpp": "Bạch Thoại Phật Pháp", "nnn": "Ngôi nhà nhỏ", "psv": "Phụng Sự Viên", "sh": "Sư Huynh",
-    "kbt": "Kinh Bài Tập", "cđb": "Chú Đại Bi", "cdb": "Chú Đại Bi", "tk": "Tâm Kinh", "lpdshv": "Lễ Phật Đại Sám Hối Văn",
-    "vsc": "Vãng Sanh Chú", "cdbstc": "Công Đức Bảo Sơn Thần Chú", "cđbstc": "Công Đức Bảo Sơn Thần Chú",
-    "nyblvdln": "Như Ý Bảo Luân Vương Đà La Ni", "bkcn": "Bổ Khuyết Chân Ngôn", "tpdtcn": "Thất Phật Diệt Tội Chân Ngôn",
-    "qalccn": "Quán Âm Linh Cảm Chân Ngôn", "tvltqdqmvtdln": "Thánh Vô Lượng Thọ Quyết Định Quang Minh Vương Đà La Ni",
-    "ps": "Phóng Sinh", "xf": "Xoay pháp", "knt": "Khai Nghiệp Tướng", "ht": "Huyền Trang"
+    "pmtl": "Pháp Môn Tâm Linh", 
+    "btpp": "Bạch Thoại Phật Pháp", 
+    "nnn": "Ngôi nhà nhỏ",
+    "kvtt": "Kinh Văn Tự Tu", // Đã thêm từ khóa mới của bạn
+    "kbt": "Kinh Bài Tập", 
+    "psv": "Phụng Sự Viên", 
+    "sh": "Sư Huynh",
+    "ps": "Phóng Sinh",
+    "cđb": "Chú Đại Bi", 
+    "cdb": "Chú Đại Bi", 
+    "tk": "Tâm Kinh", 
+    "lpdshv": "Lễ Phật Đại Sám Hối Văn",
+    "vsc": "Vãng Sanh Chú", 
+    "cdbstc": "Công Đức Bảo Sơn Thần Chú", 
+    "cđbstc": "Công Đức Bảo Sơn Thần Chú",
+    "nyblvdln": "Như Ý Bảo Luân Vương Đà La Ni", 
+    "bkcn": "Bổ Khuyết Chân Ngôn", 
+    "tpdtcn": "Thất Phật Diệt Tội Chân Ngôn",
+    "qalccn": "Quán Âm Linh Cảm Chân Ngôn", 
+    "tvltqdqmvtdln": "Thánh Vô Lượng Thọ Quyết Định Quang Minh Vương Đà La Ni",
+    "xf": "Xoay pháp", 
+    "knt": "Khai Nghiệp Tướng", 
+    "ht": "Huyền Trang"
 };
 
 function dichVietTat(text) {
