@@ -133,6 +133,35 @@ async function searchGhost(query) {
     }
 }
 
+// --- HÀM TÌM KIẾM CHUYÊN ĐỀ (TAGS) TỪ GHOST CMS ---
+async function searchGhostTags(query) {
+    const cleanApiUrl = String(GHOST_API_URL).trim().replace(/\/$/, "");
+    const cleanApiKey = String(GHOST_CONTENT_API_KEY).trim();
+    const cleanQuery = String(query || "").trim().toLowerCase();
+
+    try {
+        // Gọi API lấy toàn bộ tags của Ghost CMS
+        const apiUrl = `${cleanApiUrl}/ghost/api/content/tags/?key=${cleanApiKey}&limit=all`;
+        const response = await axios.get(apiUrl, { timeout: 15000 });
+        const tags = response.data?.tags || [];
+
+        // Lọc các tag mà tên của nó xuất hiện trong câu hỏi của người dùng
+        // Ví dụ: Câu hỏi "niệm kinh văn tự tu thế nào", Tag name: "Kinh Văn Tự Tu" => Khớp!
+        const matchedTags = tags.filter(tag => {
+            const tagName = (tag.name || "").toLowerCase();
+            return tagName.length > 2 && cleanQuery.includes(tagName);
+        });
+
+        return matchedTags.map(tag => ({
+            name: tag.name,
+            url: tag.url // Ghost CMS tự động trả về URL chuẩn của tag
+        }));
+    } catch (error) {
+        console.error("Lỗi Ghost Tags API:", error.message);
+        return [];
+    }
+}
+
 // --- GỌI GEMINI ---
 async function callGeminiWithRetry(payload, keyIndex = 0, retryCount = 0, modelName = "gemini-2.5-flash-lite") {
     if (keyIndex >= apiKeys.length) {
