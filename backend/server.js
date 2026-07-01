@@ -284,11 +284,10 @@ app.post('/api/chat', async (req, res) => {
                 suggestMsg += `* [${doc.title}]\nLink: ${doc.url}\n\n`;
             });
 
-            return res.json({ answer: HEADER_MSG + suggestMsg + FOOTER_MSG });
+            return res.json({ answer: HEADER_MSG + TAG_MSG + suggestMsg + FOOTER_MSG });
         }
 
-        res.json({ answer: HEADER_MSG + aiBody + FOOTER_MSG });
-
+        res.json({ answer: HEADER_MSG + TAG_MSG + aiBody + FOOTER_MSG });
     } catch (error) {
         console.error("Lỗi:", error.message);
         res.status(500).json({ error: "Lỗi hệ thống." });
