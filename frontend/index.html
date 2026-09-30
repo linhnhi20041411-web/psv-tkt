@@ -12,9 +12,8 @@
     <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=Quicksand:wght@400;500;700&display=swap" rel="stylesheet">
 
     <style>
-        /* CSS tùy chỉnh */
         html, body {
-            overflow: hidden; /* Ngăn cuộn toàn bộ trang */
+            overflow: hidden; 
             font-family: 'Quicksand', sans-serif; 
             background-color: #F5F5DC;
         }
@@ -32,7 +31,6 @@
             word-break: break-word; 
         }
         
-        /* Link thường */
         .message-bubble a:not([class*="tiny-btn"]) {
             color: #2563eb !important;
             text-decoration: underline !important;
@@ -42,16 +40,18 @@
         .message-bubble b, .message-bubble strong, .font-bold { font-weight: 700 !important; }
         .message-bubble i, .message-bubble em, .italic { font-style: italic !important; }
 
-        /* CSS MỚI CHO ẢNH */
-        .chat-image {
+        /* --- CSS MỚI CHO ẢNH VÀ VIDEO --- */
+        .chat-image, .chat-video {
             max-width: 100%;
             border-radius: 12px;
             margin-top: 8px;
+            margin-bottom: 8px;
             border: 1px solid rgba(0,0,0,0.1);
             box-shadow: 0 2px 5px rgba(0,0,0,0.1);
             display: block;
-            cursor: pointer;
         }
+        .chat-image { cursor: pointer; }
+        .chat-video { background-color: #000; }
 
         /* --- STYLE NÚT ĐỌC BÀI GỐC --- */
         .tiny-btn {
@@ -86,8 +86,7 @@
             <p class="text-stone-500 text-sm mt-1">Pháp Môn Tâm Linh 心靈法門 (<a href="https://nhomcongtu.pmtl.site" target="_blank" class="text-blue-600 hover:underline">nhomcongtu.pmtl.site</a>)</p>
         </div>
 
-        <div id="chat-messages" class="flex-1 p-4 md:p-6 overflow-y-auto bg-stone-50">
-            </div>
+        <div id="chat-messages" class="flex-1 p-4 md:p-6 overflow-y-auto bg-stone-50"></div>
 
         <div class="p-4 bg-white border-t border-stone-200 shadow-inner flex-shrink-0">
             <div class="flex items-center bg-stone-100 rounded-full p-2">
@@ -100,9 +99,6 @@
     </div>
 
     <script>
-    // ==========================================================
-    // 1. CẤU HÌNH SERVER (PHẢI ĐỂ TRÊN CÙNG)
-    // ==========================================================
     const BACKEND_API_URL = "https://psv-tkt.onrender.com"; 
 
     const chatMessages = document.getElementById('chat-messages');
@@ -110,9 +106,6 @@
     const sendButton = document.getElementById('send-button');
     let mySocketId = "";
 
-    // ==========================================================
-    // 2. KẾT NỐI SOCKET (Real-time)
-    // ==========================================================
     const socket = io(BACKEND_API_URL); 
     
     socket.on("connect", () => {
@@ -128,26 +121,22 @@
         userInput.disabled = true;
     });
 
-    // Lắng nghe Admin trả lời TEXT
     socket.on("admin_reply", (msg) => {
         addMessage("**Ban Quản Trị Trả Lời:**\n\n" + msg, 'bot'); 
         try { new Audio('https://www.soundjay.com/buttons/sounds/button-3.mp3').play().catch(e=>{}); } catch(e){}
     });
 
-    // Lắng nghe Admin trả lời ẢNH (MỚI)
     socket.on("admin_reply_image", (base64Src) => {
         const messageWrapper = document.createElement('div');
         messageWrapper.classList.add('message', 'mb-4', 'flex', 'w-full', 'justify-start');
         
         const messageBubble = document.createElement('div');
-        // Dùng class text-amber-200 và bg-red-900 cho giống tin nhắn Bot
         messageBubble.classList.add('message-bubble', 'rounded-xl', 'p-2', 'max-w-xl', 'shadow-md', 'bg-red-900', 'text-amber-200');
         
         const imgElement = document.createElement('img');
         imgElement.src = base64Src;
         imgElement.classList.add('chat-image');
         
-        // Click để xem full size
         imgElement.onclick = () => {
             const newTab = window.open();
             newTab.document.body.innerHTML = `<img src="${base64Src}" style="max-width:100%">`;
@@ -167,10 +156,6 @@
         try { new Audio('https://www.soundjay.com/buttons/sounds/button-3.mp3').play().catch(e=>{}); } catch(e){}
     });
 
-    // ==========================================================
-    // 3. XỬ LÝ GIAO DIỆN & LOGIC GỬI TIN
-    // ==========================================================
-
     const setAppHeight = () => {
         document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
     }
@@ -179,13 +164,6 @@
 
     window.addEventListener('load', () => {
         addMessage('Đệ chào Sư huynh ! Đệ là Phụng Sự Viên Ảo Hỗ Trợ Tra Cứu Khai Thị. Sư huynh cứ đặt câu hỏi ạ?', 'bot');
-    });
-
-    chatMessages.addEventListener('click', function(event) {
-        const linkElement = event.target.closest('a');
-        if (linkElement) {
-            // Để mặc định cho link mở tab mới
-        }
     });
 
     function linkifyAndSanitize(text) {
@@ -199,14 +177,30 @@
         sanitizedText = sanitizedText.replace(/\*\*(.*?)\*\*/g, '<span class="font-bold">$1</span>');
         sanitizedText = sanitizedText.replace(/(^|\s)_(.*?)_(\s|$)/g, '$1<span class="italic">$2</span>$3');
 
+        // ✅ Tối ưu nhận diện Ảnh và Video
         const urlRegex = /https?:\/\/[^\s<"]+/g;
         
-        const linkifiedText = sanitizedText.replace(urlRegex, function(url, offset, fullString) {
-            if (fullString.indexOf(url, offset + url.length) !== -1) {
-                return ""; 
-            }
+        const linkifiedText = sanitizedText.replace(urlRegex, function(url) {
             let cleanUrl = url.replace(/[.,;!?)]+$/, ""); 
-            return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">Đọc Thêm</a>`;
+            
+            // 1. Kiểm tra Ảnh
+            if (cleanUrl.match(/\.(jpeg|jpg|gif|png|webp)(\?.*)?$/i)) {
+                return `<br><img src="${cleanUrl}" class="chat-image" alt="Hình ảnh" onclick="window.open('${cleanUrl}', '_blank')">`;
+            } 
+            // 2. Kiểm tra Video
+            else if (cleanUrl.includes("chiase.pmtl.site/dl/") || cleanUrl.match(/\.(mp4|webm|ogg)(\?.*)?$/i)) {
+                return `<br>
+                    <video controls class="chat-video">
+                        <source src="${cleanUrl}" type="video/mp4">
+                        Trình duyệt không hỗ trợ phát video.
+                    </video>
+                    <a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn" style="background-color: #8D6E63; border-color: #5D4037; color: #fff !important;">⬇️ Tải video</a>
+                `;
+            } 
+            // 3. Link Bài Viết Ghost CMS
+            else {
+                return `<br><a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" class="tiny-btn">Đọc Thêm</a>`;
+            }
         });
 
         return linkifiedText.replace(/\n/g, '<br>');
@@ -256,7 +250,7 @@
             let errorText = `Lỗi HTTP: ${response.status}`;
             try {
                 const errorData = await response.json();
-                errorText = `Đệ xin lỗi: ${errorData.error || response.statusText}`;
+                errorText = `Đệ xin lỗi: ${errorData.error || errorData.answer || response.statusText}`;
             } catch (e) {
                 errorText = `Lỗi kết nối Server.`;
             }
@@ -281,7 +275,7 @@
             addMessage(answer, 'bot');
         } catch (error) {
             console.error("Lỗi chi tiết:", error);
-            addMessage(error.message, 'bot', 'error');
+            addMessage("Dạ hiện tại mạng của đệ đang hơi chậm hoặc hệ thống đang bảo trì. Sư huynh vui lòng thử lại sau, hoặc chat @psv : [nội dung] để nhắn trực tiếp cho Ban Quản Trị nhé!", 'bot', 'error');
         } finally {
             sendButton.disabled = false;
             sendButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"></path><path d="M22 2L15 22l-4-9-9-4 22-2z"></path></svg>';
