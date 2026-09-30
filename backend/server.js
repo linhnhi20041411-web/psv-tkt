@@ -111,7 +111,7 @@ async function trackAndNotifyNewUser(userId, platform) {
                     `👤 ID/IP: <code>${userId}</code>\n` +
                     `📈 <b>Tổng số khách hôm nay: ${totalToday} người</b>`;
                     
-        await sendTelegramAlert(`🤖 <b>PSV Khai Thị</b> 🚨\n\n${msg}`);
+        await sendTelegramAlert(`🤖 <b>Phụng Sự Viên Ảo Blogs</b> 🚨\n\n${msg}`);
     }
 }
 
