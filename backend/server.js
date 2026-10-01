@@ -344,7 +344,7 @@ app.post('/api/chat', async (req, res) => {
             3. ĐỊNH DẠNG:
                - [Tên bài viết]
                [Đoạn trích nguyên văn]
-               https://www.thegioididong.com/hoi-dap/cach-tao-lien-ket-link-trong-microsoft-word-don-gian-1343271
+               https://blogs.pmtl.site/van-de-ve-menh-dong-nam-menh-dong-nu/
             4. KHÔNG chào hỏi/kết luận. Nếu không khớp trả về: NO_DATA
         `;
 
