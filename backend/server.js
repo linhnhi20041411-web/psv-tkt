@@ -414,7 +414,37 @@ app.post(`/api/telegram-webhook/${process.env.TELEGRAM_TOKEN}`, async (req, res)
     try {
         const { message } = req.body;
         
-        if (message && message.reply_to_message) {
+        // Nếu không có message thì bỏ qua
+        if (!message) return res.sendStatus(200);
+
+        // --- 1. XỬ LÝ LỆNH TỪ ADMIN (MENU BOT) ---
+        if (message.text) {
+            const command = message.text.trim().toLowerCase();
+
+            // Lệnh /start
+            if (command === '/start') {
+                await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
+                    chat_id: message.chat.id,
+                    text: `👋 Chào Admin! Bot đang hoạt động bình thường.\n\n👉 Nhấn lệnh /baocao để xem lượng khách truy cập hôm nay nhé!`,
+                    parse_mode: 'HTML'
+                });
+                return res.sendStatus(200);
+            }
+
+            // Lệnh /baocao
+            if (command === '/baocao') {
+                const total = dailyUsers.size;
+                await axios.post(`https://api.telegram.org/bot${process.env.TELEGRAM_TOKEN}/sendMessage`, {
+                    chat_id: message.chat.id,
+                    text: `📊 <b>BÁO CÁO TỨC THỜI</b>\nSố lượt khách truy cập hôm nay tính đến hiện tại là: <b>${total}</b> người.`,
+                    parse_mode: 'HTML'
+                });
+                return res.sendStatus(200);
+            }
+        }
+        
+        // --- 2. XỬ LÝ ADMIN REPLY KHÁCH ---
+        if (message.reply_to_message) {
             const originalText = message.reply_to_message.text || message.reply_to_message.caption || "";
             const match = originalText.match(/#id_([a-zA-Z0-9_-]+)/);
             
