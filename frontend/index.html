@@ -91,8 +91,13 @@
     <div class="w-screen flex flex-col bg-white" style="height: var(--app-height, 100vh);">
         
         <div class="text-center py-4 border-b border-stone-200 shadow-sm flex-shrink-0">
-            <h1 class="font-title text-2xl md:text-3xl font-bold text-amber-800">Phụng Sự Viên Ảo</h1>
-            <p class="text-stone-500 text-sm mt-1">Pháp Môn Tâm Linh 心靈法門 (<a href="https://nhomcongtu.pmtl.site" target="_blank" class="text-blue-600 hover:underline">nhomcongtu.pmtl.site</a>)</p>
+            <!-- Bọc Logo và Tiêu đề bằng Flexbox -->
+            <div class="flex items-center justify-center gap-2 md:gap-3">
+                <img src="logo.png" alt="Logo" class="w-8 h-8 md:w-9 md:h-9 object-contain" />
+                <h1 class="font-title text-2xl md:text-3xl font-bold text-amber-800 mb-0">Phụng Sự Viên Ảo</h1>
+            </div>
+            
+            <p class="text-stone-500 text-sm mt-1">Pháp Môn Tâm Linh 心靈法門 (<a href="https://nhomcongtu.pmtl.site" target="_blank" class="hover:text-amber-800 transition-colors">nhomcongtu.pmtl.site</a>)</p>
         </div>
 
         <div id="chat-messages" class="flex-1 p-4 md:p-6 overflow-y-auto bg-stone-50"></div>
